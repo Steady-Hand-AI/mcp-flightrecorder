@@ -406,5 +406,6 @@ def finalize_release(bundle: Path, manifest: dict, notes: str, recheck, client=N
         published = True
     release, present = _release_state(client, notes, blobs)
     require(release is not None and release["draft"] is False and present == set(blobs), "Final release state is unverified")
+    recheck()
     return {"result": "PASS", "created_draft": created, "uploaded": uploaded, "published_draft": published,
             "release_id": release["id"]}

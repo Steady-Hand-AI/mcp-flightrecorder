@@ -411,7 +411,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertTrue(result["created_draft"])
         self.assertTrue(result["published_draft"])
         self.assertEqual(set(result["uploaded"]), set(self.blobs))
-        self.assertEqual(client.events[-1], "PATCH")
+        self.assertEqual(client.events[-2:], ["PATCH", "RECHECK"])
         self.assertFalse(client.release["draft"])
         self.assert_guarded_mutations(client.events)
 
@@ -420,7 +420,7 @@ class ReleaseTests(unittest.TestCase):
         result = self.finalize(client)
         self.assertEqual(result["uploaded"], [])
         self.assertFalse(result["created_draft"] or result["published_draft"])
-        self.assertEqual(client.events, ["RECHECK"])
+        self.assertEqual(client.events, ["RECHECK", "RECHECK"])
 
     def test_matching_partial_draft_and_published_only_upload_missing(self):
         for draft in (True, False):
@@ -506,6 +506,41 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaises(ReleaseError):
                 self.finalize(client)
         self.assertEqual(client.events, ["RECHECK"])
+
+    def test_identity_drift_after_publication_cannot_return_success(self):
+        client = ReleaseClient(self.notes, self.blobs, draft=True, present=self.blobs)
+        state = {"changed": False}
+        request = client.request
+        def publish_then_drift(method, path, payload):
+            result = request(method, path, payload)
+            if method == "PATCH":
+                state["changed"] = True
+            return result
+        def recheck():
+            if state["changed"]:
+                raise ReleaseError("Tag identity changed after publication")
+        with patch.object(client, "request", side_effect=publish_then_drift):
+            with self.assertRaisesRegex(ReleaseError, "identity changed after publication"):
+                self.finalize(client, recheck)
+        self.assertFalse(client.release["draft"])
+        self.assertEqual(client.events, ["PATCH"])
+
+    def test_identity_drift_during_existing_asset_verification_cannot_return_success(self):
+        client = ReleaseClient(self.notes, self.blobs, draft=False, present=self.blobs)
+        state = {"changed": False}
+        download = client.download_asset
+        def download_then_drift(asset_id, expected_size):
+            blob = download(asset_id, expected_size)
+            state["changed"] = True
+            return blob
+        def recheck():
+            if state["changed"]:
+                raise ReleaseError("Tag identity changed during asset verification")
+        with patch.object(client, "download_asset", side_effect=download_then_drift):
+            with self.assertRaisesRegex(ReleaseError, "identity changed during asset verification"):
+                self.finalize(client, recheck)
+        self.assertFalse(client.release["draft"])
+        self.assertEqual(client.events, [])
 
 
 class Response(io.BytesIO):

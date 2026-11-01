@@ -147,6 +147,8 @@ def check_metadata(data: bytes, project: dict, readme: bytes) -> None:
         require(metadata.get_all(key) == [value], f"incorrect metadata {key}")
     # README.md is the declared Markdown description. Preserve its UTF-8 bytes;
     # decoding the email payload as text first can replace non-ASCII characters.
+    require(metadata.get_all("Content-Transfer-Encoding") is None,
+            "unexpected metadata Content-Transfer-Encoding")
     require(metadata.get_payload(decode=True) == readme, "metadata description differs from README.md")
     require(set(metadata.get_all("Project-URL", [])) == {f"{k}, {v}" for k, v in URLS.items()},
             "incorrect Project-URL metadata")

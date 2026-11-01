@@ -1,6 +1,7 @@
 """Exercise real clean artifacts and disposable, deliberately invalid neighbors."""
 import importlib.util
 import base64
+import binascii
 import csv
 from email.parser import BytesParser
 import hashlib
@@ -199,6 +200,16 @@ class PackageGuardTests(unittest.TestCase):
                     self.assertEqual(digest, "sha256=" + base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode())
                     self.assertEqual(size, str(len(data)))
 
+    def encoded_description(self, header, body):
+        encoded = b"begin 644 README.md\n" + b"".join(
+            binascii.b2a_uu(body[index:index + 45]) for index in range(0, len(body), 45)
+        ) + b" \nend\nUnreviewed generated description.\n"
+        data = header + b"\nContent-Transfer-Encoding: x-uuencode\n\n" + encoded
+        # The email decoder drops the trailing prose, so decoded equality alone
+        # cannot establish that every generated description byte is reviewed.
+        self.assertEqual(BytesParser().parsebytes(data).get_payload(decode=True), body)
+        return data
+
     def test_wheel_description_and_content_type_match_source(self):
         with zipfile.ZipFile(self.wheel) as archive:
             name = next(n for n in archive.namelist() if n.endswith("/METADATA"))
@@ -209,6 +220,7 @@ class PackageGuardTests(unittest.TestCase):
         for data, reason in (
             (header + separator + b"Unreviewed generated description.\n", "metadata description"),
             (header + separator, "metadata description"),
+            (self.encoded_description(header, body), "Content-Transfer-Encoding"),
             (original.replace(b"Description-Content-Type: text/markdown", b"Description-Content-Type: text/plain", 1), "Description-Content-Type"),
         ):
             with self.subTest(reason=reason):
@@ -228,6 +240,7 @@ class PackageGuardTests(unittest.TestCase):
             self.assertEqual(body, (self.source / "README.md").read_bytes())
             for data, reason in (
                 (header + separator + b"Unreviewed generated description.\n", "metadata description"),
+                (self.encoded_description(header, body), "Content-Transfer-Encoding"),
                 (original.replace(b"Description-Content-Type: text/markdown", b"Description-Content-Type: text/plain", 1), "Description-Content-Type"),
             ):
                 with self.subTest(member=name, reason=reason):

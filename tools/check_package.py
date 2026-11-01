@@ -138,12 +138,16 @@ def read_archive(path: Path, *, wheel: bool) -> dict[str, bytes]:
     return members
 
 
-def check_metadata(data: bytes, project: dict) -> None:
+def check_metadata(data: bytes, project: dict, readme: bytes) -> None:
     metadata = BytesParser().parsebytes(data)
     for key, value in {"Name": project["name"], "Version": project["version"],
                        "Requires-Python": ">=3.11", "License-Expression": "Apache-2.0",
-                       "Author": "Volodymyr Barylyak", "Maintainer": "Volodymyr Barylyak"}.items():
+                       "Author": "Volodymyr Barylyak", "Maintainer": "Volodymyr Barylyak",
+                       "Description-Content-Type": "text/markdown"}.items():
         require(metadata.get_all(key) == [value], f"incorrect metadata {key}")
+    # README.md is the declared Markdown description. Preserve its UTF-8 bytes;
+    # decoding the email payload as text first can replace non-ASCII characters.
+    require(metadata.get_payload(decode=True) == readme, "metadata description differs from README.md")
     require(set(metadata.get_all("Project-URL", [])) == {f"{k}, {v}" for k, v in URLS.items()},
             "incorrect Project-URL metadata")
     require(set(metadata.get_all("License-File", [])) == {"LICENSE", "NOTICE"},
@@ -178,7 +182,7 @@ def check_wheel(members: dict[str, bytes], source: dict[str, bytes], project: di
     exact(set(members), set(copied) | generated, "wheel")
     for name, data in copied.items():
         require(members[name] == data, f"wheel content differs from source: {name}")
-    check_metadata(members[prefix + "METADATA"], project)
+    check_metadata(members[prefix + "METADATA"], project, source["README.md"])
     require(members[prefix + "entry_points.txt"].decode().strip() ==
             "[console_scripts]\nfr = mcp_flightrecorder.cli:main", "incorrect wheel CLI entrypoint")
     rows = list(csv.reader(io.StringIO(members[prefix + "RECORD"].decode())))
@@ -207,8 +211,8 @@ def check_sdist(members: dict[str, bytes], source: dict[str, bytes], project: di
     exact(set(members), set(copied) | generated, "sdist")
     for name, data in copied.items():
         require(members[name] == data, f"sdist content differs from source: {name}")
-    check_metadata(members["PKG-INFO"], project)
-    check_metadata(members[egg + "PKG-INFO"], project)
+    check_metadata(members["PKG-INFO"], project, source["README.md"])
+    check_metadata(members[egg + "PKG-INFO"], project, source["README.md"])
     exact(set(members[egg + "SOURCES.txt"].decode().splitlines()),
           set(members) - {"PKG-INFO", "setup.cfg"}, "sdist build manifest")
 
@@ -223,7 +227,7 @@ def check(source: Path, wheel: Path | None = None, sdist: Path | None = None) ->
     project = tomllib.loads(members["pyproject.toml"].decode())["project"]
     require(project["name"] == "mcp-flightrecorder" and project["version"] == "0.5.16"
             and project["requires-python"] == ">=3.11" and project["license"] == "Apache-2.0"
-            and project["urls"] == URLS, "incorrect project identity")
+            and project["urls"] == URLS and project["readme"] == "README.md", "incorrect project identity")
     report = {"status": "PASS", "source": inventory(members)}
     for kind, path, validator in (("wheel", wheel, check_wheel), ("sdist", sdist, check_sdist)):
         if path is not None:

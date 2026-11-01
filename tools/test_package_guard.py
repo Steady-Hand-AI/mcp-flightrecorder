@@ -1,5 +1,9 @@
 """Exercise real clean artifacts and disposable, deliberately invalid neighbors."""
 import importlib.util
+import base64
+import csv
+from email.parser import BytesParser
+import hashlib
 import io
 import os
 from pathlib import Path
@@ -36,26 +40,41 @@ class PackageGuardTests(unittest.TestCase):
     def source_copy(self):
         return Path(shutil.copytree(self.source, self.work / "source"))
 
-    def wheel_copy(self, *, additions=(), replacement=None, drop=None):
+    def wheel_copy(self, *, additions=(), replacement=None, drop=None, update_record=False):
         target = self.work / "changed.whl"
         with zipfile.ZipFile(self.wheel) as original, zipfile.ZipFile(target, "w") as changed:
+            contents = {}
             for entry in original.infolist():
                 if entry.filename != drop:
                     data = original.read(entry)
                     if replacement and entry.filename == replacement[0]:
                         data = replacement[1]
-                    changed.writestr(entry, data)
+                    contents[entry.filename] = (entry, data)
+            if update_record:
+                record = next(name for name in contents if name.endswith("/RECORD"))
+                output = io.StringIO(newline="")
+                writer = csv.writer(output)
+                for name, (_, data) in contents.items():
+                    digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
+                    writer.writerow((name, "" if name == record else "sha256=" + digest,
+                                     "" if name == record else len(data)))
+                contents[record] = (contents[record][0], output.getvalue().encode())
+            for entry, data in contents.values():
+                changed.writestr(entry, data)
             for name, data in additions:
                 changed.writestr(name, data)
         return target
 
-    def sdist_copy(self, *, addition=None, replacement=None):
+    def sdist_copy(self, *, addition=None, replacement=None, replacements=None):
         target = self.work / "changed.tar.gz"
+        replacements = dict(replacements or {})
+        if replacement:
+            replacements[replacement[0]] = replacement[1]
         with tarfile.open(self.sdist) as original, tarfile.open(target, "w:gz") as changed:
             for entry in original:
                 data = original.extractfile(entry).read() if entry.isfile() else None
-                if replacement and entry.name == replacement[0]:
-                    data = replacement[1]
+                if entry.name in replacements:
+                    data = replacements[entry.name]
                     entry.size = len(data)
                 changed.addfile(entry, io.BytesIO(data) if data is not None else None)
             if addition:
@@ -165,6 +184,75 @@ class PackageGuardTests(unittest.TestCase):
             wheel = self.wheel_copy(replacement=(record, archive.read(record).replace(b"sha256=", b"sha256=X", 1)))
         with self.assertRaisesRegex(guard.Rejected, "RECORD mismatch"):
             guard.check(self.source, wheel)
+
+    def assert_valid_record(self, wheel):
+        with zipfile.ZipFile(wheel) as archive:
+            record = next(name for name in archive.namelist() if name.endswith("/RECORD"))
+            rows = list(csv.reader(io.StringIO(archive.read(record).decode())))
+            self.assertEqual(len(rows), len(archive.namelist()))
+            self.assertEqual({row[0] for row in rows}, set(archive.namelist()))
+            for name, digest, size in rows:
+                if name == record:
+                    self.assertEqual((digest, size), ("", ""))
+                else:
+                    data = archive.read(name)
+                    self.assertEqual(digest, "sha256=" + base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode())
+                    self.assertEqual(size, str(len(data)))
+
+    def test_wheel_description_and_content_type_match_source(self):
+        with zipfile.ZipFile(self.wheel) as archive:
+            name = next(n for n in archive.namelist() if n.endswith("/METADATA"))
+            original = archive.read(name)
+        header, separator, body = original.partition(b"\n\n")
+        self.assertEqual(separator, b"\n\n")
+        self.assertEqual(body, (self.source / "README.md").read_bytes())
+        for data, reason in (
+            (header + separator + b"Unreviewed generated description.\n", "metadata description"),
+            (header + separator, "metadata description"),
+            (original.replace(b"Description-Content-Type: text/markdown", b"Description-Content-Type: text/plain", 1), "Description-Content-Type"),
+        ):
+            with self.subTest(reason=reason):
+                self.assertNotEqual(data, original)
+                wheel = self.wheel_copy(replacement=(name, data), update_record=True)
+                self.assert_valid_record(wheel)
+                with self.assertRaisesRegex(guard.Rejected, reason):
+                    guard.check(self.source, wheel)
+
+    def test_both_sdist_descriptions_and_content_types_match_source(self):
+        with tarfile.open(self.sdist) as archive:
+            originals = {entry.name: archive.extractfile(entry).read() for entry in archive
+                         if entry.isfile() and entry.name.endswith("/PKG-INFO")}
+        self.assertEqual(len(originals), 2)
+        for name, original in originals.items():
+            header, separator, body = original.partition(b"\n\n")
+            self.assertEqual(body, (self.source / "README.md").read_bytes())
+            for data, reason in (
+                (header + separator + b"Unreviewed generated description.\n", "metadata description"),
+                (original.replace(b"Description-Content-Type: text/markdown", b"Description-Content-Type: text/plain", 1), "Description-Content-Type"),
+            ):
+                with self.subTest(member=name, reason=reason):
+                    self.assertNotEqual(data, original)
+                    sdist = self.sdist_copy(replacement=(name, data))
+                    with self.assertRaisesRegex(guard.Rejected, reason):
+                        guard.check(self.source, sdist=sdist)
+
+    def test_utf8_readme_is_preserved_in_all_metadata(self):
+        source = self.source_copy()
+        readme = (source / "README.md").read_bytes() + "\nUnicode control: café, π, 日本語.\n".encode("utf-8")
+        (source / "README.md").write_bytes(readme)
+        with zipfile.ZipFile(self.wheel) as archive:
+            name = next(n for n in archive.namelist() if n.endswith("/METADATA"))
+            metadata = archive.read(name).partition(b"\n\n")[0] + b"\n\n" + readme
+        self.assertEqual(BytesParser().parsebytes(metadata).get_payload(decode=True), readme)
+        wheel = self.wheel_copy(replacement=(name, metadata), update_record=True)
+        self.assert_valid_record(wheel)
+        with tarfile.open(self.sdist) as archive:
+            replacements = {entry.name: archive.extractfile(entry).read().partition(b"\n\n")[0] + b"\n\n" + readme
+                            for entry in archive if entry.isfile() and entry.name.endswith("/PKG-INFO")}
+        self.assertEqual(len(replacements), 2)
+        replacements["mcp_flightrecorder-0.5.16/README.md"] = readme
+        sdist = self.sdist_copy(replacements=replacements)
+        self.assertEqual(guard.check(source, wheel, sdist)["status"], "PASS")
 
     def test_unsafe_wheel_paths_and_duplicates(self):
         for name in ("../outside.py", "/absolute.py", "C:/drive.py", "a\\b.py", "a//b.py"):

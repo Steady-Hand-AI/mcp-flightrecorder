@@ -1,0 +1,90 @@
+[
+  {
+    "id": "fixture-r0",
+    "object": "chat.completion.chunk",
+    "created": 1,
+    "model": "fixture-model",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "role": "assistant",
+          "tool_calls": [
+            {
+              "index": 0,
+              "id": "call-alpha",
+              "type": "function",
+              "function": {
+                "name": "echo",
+                "arguments": "{\"text\":\"alpha-"
+              }
+            },
+            {
+              "index": 1,
+              "id": "call-beta",
+              "type": "function",
+              "function": {
+                "name": "echo",
+                "arguments": "{\"text\":\"be"
+              }
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ]
+  },
+  {
+    "id": "fixture-r0",
+    "object": "chat.completion.chunk",
+    "created": 1,
+    "model": "fixture-model",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "tool_calls": [
+            {
+              "index": 1,
+              "function": {
+                "arguments": "ta\"}"
+              }
+            },
+            {
+              "index": 0,
+              "function": {
+                "arguments": "selected\"}"
+              }
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ]
+  },
+  {
+    "id": "fixture-r0",
+    "object": "chat.completion.chunk",
+    "created": 1,
+    "model": "fixture-model",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {},
+        "finish_reason": "tool_calls"
+      }
+    ]
+  },
+  {
+    "id": "fixture-r0",
+    "object": "chat.completion.chunk",
+    "created": 1,
+    "model": "fixture-model",
+    "choices": [],
+    "usage": {
+      "prompt_tokens": 5,
+      "completion_tokens": 7,
+      "total_tokens": 12
+    }
+  }
+]

@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-flightrecorder"
+version = "0.5.16"
+description = "Bounded, explicit MCP host evidence capture in portable SQLite"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Volodymyr Barylyak" }]
+maintainers = [{ name = "Volodymyr Barylyak" }]
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/Steady-Hand-AI/mcp-flightrecorder"
+Issues = "https://github.com/Steady-Hand-AI/mcp-flightrecorder/issues"
+Documentation = "https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/README.md"
+
+[project.scripts]
+fr = "mcp_flightrecorder.cli:main"
+
+[project.optional-dependencies]
+openai-chat = ["openai>=3.35.1"]
+mcp = ["mcp>=2.3.0"]
+mcp-session = ["mcp>=2.3.0"]
+mcp-session-legacy = ["mcp>=1.23.1,<2"]
+anyllm-ollama = ["any-llm-sdk[ollama]>=1.29.0", "ollama>=0.6.3"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+

@@ -1,0 +1,157 @@
+# Capture API
+
+**Package 0.5.16 · schema 6.** This is the SDK-free producer contract. See [Architecture](architecture.md) for storage ownership and [Integrations](integrations.md) for native SDK adapters.
+
+## 1. Construction and values
+
+Public imports are `Recorder`, `RecorderError` and `MISSING` from `mcp_flightrecorder`. `MISSING` means unexposed; JSON `null` remains an observed value. Payloads/prompt/arguments may explicitly be `MISSING`; otherwise inputs are ordinary Python JSON values: string-key dictionaries, lists, strings, finite numbers, booleans and null. Reject unsupported objects without calling their custom serializers.
+
+```text
+Recorder(path, *, capture, coverage, comparisons=True, environment=None, limits=None)
+rec.turn(prompt, *, conversation_id=None, conditions=None)
+rec.dispatch(*, action, name, arguments, decision_event_ids=(), complete=True)
+rec.capture_scope() -> CaptureScope
+rec.observe(kind, *, scope, payload=MISSING, facts=None) -> CaptureResult
+rec.start_operation(*, scope, client_id, method, arguments,
+                    server_key=None, name=None, decision_id=None,
+                    dispatch_event_id=None, link_basis="none", complete=True,
+                    retention=None)
+    -> CaptureResult
+rec.finish_operation(ticket, *, status, result=MISSING,
+                     resolution="unknown", input_rounds=None, error=None,
+                     text_paths=None, complete=True, retention=None)
+    -> CaptureResult
+rec.health() -> Health
+rec.close(timeout=5.0) -> CloseResult
+await rec.aclose(timeout=5.0) -> CloseResult
+rec.finalize(timeout=5.0) -> CloseResult
+```
+
+`capture` is explicitly `content` or `metadata`. `comparisons` is boolean (default true), persisted in policy; false disables original HMAC comparisons/reusable original identity, not recording. `coverage` has exactly these fields (only `model_complete` may be omitted):
+
+```json
+{"producers":{"model":"provider-observer","host":"host-observer","mcp":"client-observer"},"model_complete":false}
+```
+
+All three producer keys are required; each value is a nonempty string or null. Null declares unavailable. `model_complete` defaults false, must be boolean, and cannot be true with a null model producer. Core assigns `boundary`, its configured `source_id`, `provenance=observed`, and `event_version=1`; unavailable-boundary calls are rejected. Producer groups remain fixed for the run; instance IDs are separate facts. Preserve configuration in `runs.coverage_json`, capture policy in `policy_json`, and supplied environment (default `{}`) in `environment_json`.
+
+Require a fresh path and existing parent directory. Refuse an existing main file or `-wal`, `-shm`, or `-journal` sibling, including empty files; never overwrite, resume or migrate. Constructor configuration errors raise `ValueError`; existing-file refusal raises `FileExistsError`; initialization/storage failure raises `RecorderError`. Export that exception. Constructor returns only after writer-owned initialization succeeds. It must not delete a preexisting file on failure.
+
+Each concurrent process/run must choose its own new recording path; an existing-file refusal deliberately protects the recording and is not a reason to reuse or delete an active fileset.
+
+`limits` may override the following defaults. Unknown keys, booleans, nonintegers and nonpositive values are configuration errors.
+
+| Key | Default | Unit |
+|---|---:|---|
+| `ordinary_items` | 256 | Admitted ordinary bundles |
+| `ordinary_bytes` | 8,388,608 | Charged ordinary bytes |
+| `completion_items` | 64 | Completion reservations/bundles |
+| `completion_bytes` | 262,144 | Charged completion bytes |
+| `batch_items` | 64 | Bundles per writer batch |
+| `batch_bytes` | 1,048,576 | Charged bytes per writer batch |
+| `batch_delay_ms` | 20 | Milliseconds |
+| `committed_cache_items` | 512 | Cached committed identities |
+| `busy_timeout_ms` | 1,000 | SQLite busy-wait milliseconds |
+
+Smaller positive completion caps are valid and may admit zero operations; there is no hidden minimum workload. The 1 MiB encoded comparison-projection cap is fixed. Control IDs/names/provider references/cache labels are at most 256 UTF-8 bytes; core-issued IDs used in envelopes at most 96. JSON Pointers are at most 1,024 bytes; error origin/type at most 64. Oversized control fields reject an envelope; payload/manifest bytes use the configured core caps. Integers stored in SQLite columns must fit signed 64-bit. Retain declared environment/conditions as metadata, never copy payloads into them automatically.
+
+## 2. Receipts, scopes and identity
+
+Results are immutable attribute-bearing values; their concrete class implementation is private. `CaptureResult` has `status` (`accepted`, `rejected`, `closed`), `reason` (null on success), `event_id`, `turn_id`, `model_call_id`, `decision_id`, `operation_id`, `ticket` (inapplicable fields null), and `losses` (bounded reason tuple).
+
+**Accepted means frozen, charged and FIFO-admitted, not committed or durable.** Prerequisite identities are published atomically with admission; rejection publishes none. Receipts report admission; there are no per-event durability futures. Core allocates identities. Decision occurrence `decision_id` is used by operations; a decision's `event_id` is used by `answers` and `dispatch_source`. Never interchange them. A request receipt supplies its `model_call_id`; subsequent observations may use null when its request was lost, with an unavailable-context diagnostic.
+
+`CaptureScope` exposes immutable `run_id`, `turn_id`, `dispatch_event_id`. It is recorder-issued, not caller-constructed. Explicit `scope=None` is invalid on public observation/start calls; a valid unscoped capture uses `rec.capture_scope()`. Rejection must not stop an accepting recorder. Both scope methods return synchronous context managers usable inside async tasks. The value yielded by `with` exposes `.receipt`, `.scope`, and, after exit, `.exit_receipt`.
+
+Ambient state uses private frames containing the public scope and its predecessor. Normal exit resets only the calling context without globally retiring its frame, so an inherited child keeps its scope. If cleanup runs in another context and token reset raises `ValueError`, it marks only the exiting frame retired. Each caller's next `capture_scope()` skips its retired prefix, stopping at the first live frame or the unscoped state. The closer normalizes immediately only when its current frame is the exiting frame; a different live closer scope stays intact. Scope exit does not suppress the host exception, and foreign-context reset does not replace it.
+
+A rejected turn establishes a disabled scope; calls using it return `invalid_scope`, preventing attribution to an outer turn. Its exit receipt is rejected with `invalid_scope`. A rejected dispatch retains its turn but installs no dispatch association; it cannot fall back to a surrounding dispatch. A live rejected predecessor stops retired-prefix normalization. Outside a turn, valid unscoped capture uses null `turn_id`. Dispatch exit, including rejected entry, returns an accepted receipt with its scope's turn ID and no event ID or terminal write. Turn entry/exit receipts also have no event ID because they concern the turn row.
+
+Turn entry freezes the prompt and declared conditions (default `{}`), creates the turn row, copies coverage, and sets `condition_key = sha256(json.dumps(conditions, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()`. Condition keys use the sorted encoding above; retained payload bodies preserve their own JSON key order. Exit records observed end time and `host_outcome=returned`, `error`, or `cancelled`; it does not close operations. Loss-free capture stays `unknown` until orderly recorder close. Only ended turns with no affecting capture loss, partial observation or unfinished model/MCP work become `complete`; others become `partial`. Unassignable run loss prevents completeness claims for its turns. Body omission under declared retention alone is not lost observation. `model_complete` is a coverage declaration copied into each turn, never inferred from zero tool calls.
+
+Capture scope when an exposed call/factory is invoked, before returning a lazy object. Pass that immutable snapshot at actual submission/start and preserve it through terminal callbacks. An explicit snapshot obtained before ambient retirement remains valid; invocation attribution and terminal ticket ownership retain their original turn/dispatch identities under another ambient scope. Creation alone records no execution or reservation. Freeze submitted data when actually exposed. Lexical scope exit does not end lazy work; recorder closure does not cancel host work.
+
+Expected validation, capacity and closed-state failures return receipts, never replace host results/errors/cancellation. Receipt reasons are `invalid_input`, `invalid_scope`, `unavailable_boundary`, `capacity`, `duplicate_completion`, `prerequisite_lost`, `writer_failed`, or `closed`. Bound diagnostics without embedding payload content. Unexpected internal capture exceptions become failure diagnostics; do not swallow cancellation supplied by the host.
+
+Identity resolution checks pending and committed memory under the existing short lock, then releases it before any SQLite access. Each capture preparation owns a fresh private scope with at most one lazy read-only fallback connection on its calling thread. That connection uses autocommit statements, not a long read transaction: a later lookup can see a prerequisite committed between lookups. Misses are not cached and pending values are not promoted into committed memory. The default committed cache remains **512** entries. Every cursor is closed, and the scope closes before admission or receipt logging; a cleanup failure cannot publish the prepared bundle. Nested and concurrent captures own separate scopes.
+
+## 3. Closed observations and request annotations
+
+Only the following `observe` kinds are public. Unknown kinds/fields reject the attempted envelope. In this table fields without defaults are required; null references mean explicitly unavailable. Common optional facts are `complete=true`, `retention=null`, and `instance_id=null` (string). Preserve these facts in bounded event metadata where appropriate; `retention` controls artifacts rather than becoming a payload copy in metadata.
+
+| Kind / boundary | Payload and additional facts |
+|---|---|
+| `model.request` / model | Original submitted JSON. `message_path="/messages"`, `messages=null`, `field_paths=[]`, `catalog_path=null`, `insertions=[]`. Core creates a model-call ID. |
+| `model.tool_call` / model | Object containing `arguments` (parsed JSON when exposed), optionally `arguments_raw` (exposed raw string); either may be absent. `name` (string or null when unexposed), `model_call_id=null`, `provider_ref=null` (string). Core creates decision/event IDs and `args_digest`. |
+| `model.response` / model | Original consumed response; `model_call_id=null`, `state="complete"` (`complete`, `partial`, `error`, `cancelled`). Usage remains in payload as exposed. This closes that model-call observation; a non-complete state overrides `complete=true` for completeness. |
+| `host.tool_result` / host | Original prepared material; `sources=[]`, `text_paths=null`. Creates the prepared-material event and witnessed `transformed_from` links. |
+| `cache.served` / host or mcp | Exposed served content, or MISSING. `owner` (`host`, `client`), `operation_id=null`, `client_id=null`, `cache_id=null`, `cache_scope=null`, `ttl_ms=null`. Host owner selects host boundary; client selects mcp. IDs/cache scope are strings; TTL is finite nonnegative milliseconds. |
+
+`cache.served` asserts an actually observed served hit, not absence of network traffic; it does not silently change an operation's resolution. Preserve discovery responses through ordinary MCP operations. Core does not resolve provider IDs or guess associations from names, arguments or timing; adapters provide explicit recorder references.
+
+For `model.request`, `message_path` identifies an exposed ordered array. Null means direct request storage with a limitation diagnostic. Nonnull paths must exist. `field_paths` lists additional present, nonoverlapping JSON Pointers; `catalog_path`, when supplied, must be one of them. Its artifact becomes that event's `catalog_ref` without a global schema cache. Message and field paths cannot overlap.
+
+`messages=null` declares unavailable binding context for every message. Otherwise it is an equally long ordered annotation list, each item having exactly `bindings` (list or null), `unresolved=[]`, and `complete=true`. Empty bindings explicitly declare no answer bindings; null does not. Each binding has `decision_event_id`, relative `pointer`, optional `result_event_id=null`, and `text_paths=null`. Paths for text extraction are relative to that bound block. Each unresolved item has `pointer`, nonempty `reason`, optional `provider_ref` string. Preserve missing/ambiguous references as unknown; do not invent a resolver.
+
+Validate pointers against original messages; one resolved binding per block location. Missing/wrong-kind explicit decision endpoints remain symbolic with diagnostics and a fresh unknown handle, not reusable known identity. Known blocks in partly unresolved messages survive. Empty `text_paths=[]` means observed zero text blocks; null means unavailable projection. `text_paths=[""]` selects a string block itself. Extract string values at ordered `text_paths` for `text_blocks_json/1`; missing/nonstring/partial extraction yields unavailable digest, never text coercion. Store computed `result_event_id`/`submitted_text_digest` in binding details, never raw submitted text there.
+
+Freeze originals, annotations and retention together. Calculate message handles from the complete reusable message identity. Keep duplicate ordered members. Every request carries candidates; writer-side SAVEPOINT dedup chooses the first committed witness using a request-independent `link_id`. Core builds manifests, artifacts and links; callers never supply artifact handles, hashes or SQL columns. No loss may silently shorten a manifest.
+
+`sources` is a list of `{event_id, slot="payload", pointer=""}`; slot is `payload` or `catalog`. Source IDs may be symbolic, preserving missing-source diagnostics. `insertions` is a list of `{source_event_id, target_pointer, content}` explicitly attached to this request only. `content` is the observed prepared original supplied by the host hook; compare it against the actual destination before producing `inserted_into`, witnessed by this request, targeting `payload`. Compare typed canonical JSON encodings, not Python `==` (`true` and `1` differ). An absent/mismatched destination yields a diagnostic without an insertion claim. Equality verifies a stated destination; it never discovers provenance. Insertion evidence is attached to the submitted request, with no ambient context stash.
+
+For example, a host-observed user message known to contain no tool answer may use `messages=[{"bindings": []}]` alongside its actual payload. A tool-result message instead carries its real decision event, optional result event, pointer and text paths. An empty binding list is not a shortcut for unknown history. Missing or incomplete annotations prevent reusable identity, can retain fresh message bodies on later requests and amplify storage cost as history grows; explicit unresolved/partial diagnostics remain truthful. No body omission or fabricated attribution is used to make that workload look smaller.
+
+## 4. Dispatch and MCP lifecycle
+
+Dispatch `action` is `execute`, `refuse`, `local`, or `defer`. Emit `host.dispatch`, put action in `state`, tool in `name`, and forwarded arguments in `payload.arguments`. Compute `args_digest`; write decision-event → dispatch `dispatch_source` links with the dispatch as witness. Preserve symbolic missing sources with diagnostics. Admission supplies the dispatch event ID to its scope. Exit is scope restoration, not a success observation.
+
+Start emits `mcp.request` plus a `running` operation atomically, with `payload.arguments`, `args_digest`, required nonempty client/method strings and optional server/tool strings. `host_hook` requires an explicit dispatch event or scope dispatch; `propagated` requires `decision_id` and no explicit dispatch; `none` requires both explicit attribution fields null and deliberately ignores ambient dispatch. Reject contradictory inputs, including differing explicit/scope dispatches for `host_hook`. Copy turn scope and explicit attribution; never match by tool name. Populate `operations.model_call_id` from the known explicit decision occurrence, or from the dispatch’s sole known decision source when no explicit decision was supplied; otherwise null. Do not fill `operations.decision_id` by guessing among dispatch sources. The start and terminal events carry the same model/decision/operation attribution as their operation. The accepted receipt includes an opaque recorder-owned operation ticket.
+
+`start_operation(retention=...)` applies the existing retention mapping to the complete `{"arguments": ...}` artifact body, not just its inner arguments. The default `None` preserves ordinary capture. Preparation detaches both the original arguments and the supplied mapping before admission; subsequent caller mutation cannot change stored content. `args_digest` and `observed_bytes` describe the original projection, while stored bytes, SHA256 and retention flags describe the replacement. Explicit `retained: None` stores JSON null; an omission mapping stores no body. Invalid direct-core retention returns the existing rejection receipt without admitting a request or consuming an operation reservation; a valid neighboring operation can still complete.
+
+Reserve minimal completion bytes/slot with start admission in the separate completion pool. `finish_operation` uses the ticket's frozen scope/identity; accepts terminal statuses `ok`, `tool_error`, `protocol_error`, `transport_error`, `timeout`, `cancelled`, or `local_error`. Only shutdown assigns `incomplete`. Resolution is `remote`, `client_cache`, `host_cache`, `local`, `mixed`, or `unknown`, based on positive observation. `input_rounds` is null or a nonnegative signed-64-bit integer. `error` is null or `{origin, type, code}`; origin/type are bounded strings, code is signed-64-bit integer or null. Error messages belong in retained result content.
+
+Terminal event `mcp.response` plus exactly one running-row update is atomic. Persist measured monotonic duration and exposed error code. `text_paths` selects ordered string locations in the original result for `result_text_digest`. Terminal transfers its reservation once into FIFO even when ordinary admission is full; optional result bytes may be omitted. Duplicate completion is rejected without releasing another reservation; invalid terminal input also leaves the original reservation available for a valid retry or orderly close. Follow [Architecture §4](architecture.md#4-transactions-and-shutdown) for savepoints, dependent suffix loss and fatal storage errors. Reservations remain charged while queued/writer-held and are released only on commit/discard or shutdown.
+
+## 5. Retention and shutdown
+
+Content retains originals by default; metadata omits bodies with `capture_metadata`, while retaining structural manifests and envelopes. `retention=null` uses that policy. An override is `{policy_id, retained, redacted=false, truncated=false}`; alternatively omit `retained` and supply nonempty `omitted_reason`. Metadata mode always dominates body retention. Structured model-request overrides must preserve extracted paths/array positions; changing their structure rejects the override rather than inventing membership. Binding pointers validate originals; retained messages cannot change original message ordering or membership. Never put omitted bodies in details, diagnostics or receipts.
+
+Compute comparison digests from the detached original values, independently of retained replacements or omissions, using a run-local random HMAC key and named projections. For request messages, annotation/binding validation precedes field preparation; those fields supply original `observed_bytes` before comparison encoding and are reused for the final artifact. This preparation order does not change original-value authority. For tool choices, parse exposed raw arguments with duplicate-key rejection; digest parsed arguments when present, otherwise the successfully parsed raw value. If both exist they must have equal typed canonical encodings for a token. Invalid raw or conflicting observations remain separately retained with an unavailable token. SDK dictionaries without raw text are digested as exposed. `complete=false`, disabled/oversized projections or unsupported values produce unavailable tokens with reasons. Keep redacted, truncated and omitted independent; retained SHA covers retained bytes only. Capacity omission remains explicit and does not erase an admitted envelope. Capacity-driven body/manifest omission makes the affected turn partial and the run incomplete; configured retention omission and unavailable HMAC alone do not. An admitted envelope still adds zero dropped events.
+
+`Health` exposes `state` (`accepting`, `stopped`, `failed`), `dropped_events`, `writer_errors`, `reason_counts`, `open_operations` (accepted starts through terminal COMMIT, explicit discard or close-time incomplete handling), and `ordinary`/`completion` objects containing `used_bytes`, `max_bytes`, `used_slots`, `max_slots`. Used capacity includes writer-held/pending data. Diagnostics use the eight receipt reasons plus `body_omitted`, `partial`, `unresolved`, `turn_update_lost`, `finalize_busy`, `finalize_timeout`, `other`; increment each applicable reason once per attempted observation/closure attempt, never per artifact. Unexpected detail reasons aggregate under `other`. Body omission under policy/capacity increments `body_omitted`, not dropped events; unavailable HMAC alone does not mean observation loss.
+
+Count each attempted event envelope once if rejected or discarded, including duplicate terminal attempts; never count it twice at admission and writer failure. A dropped request counts one envelope, not its artifact/link rows. Turn-row updates, retained-body omission and synthetic close-time `incomplete` updates do not increment `dropped_events`. They still produce appropriate health/completeness diagnostics. `writer_errors` counts failed writer transaction/finalization attempts once each (cleanup errors belong to that same attempt); expected busy/not-ready is a diagnostic, not a storage error; duplicates increment `reason_counts.duplicate_completion`, not `writer_errors`. Persist health when possible; crash survival is not promised. Post-close diagnostics stay in memory; they cannot mutate the finalized database or extend its recording interval.
+
+Timeouts bound caller waiting/SQLite busy waits, not arbitrary OS I/O; a still-running writer is never reported joined. Timeouts are positive finite seconds; invalid timeout configuration raises `ValueError`. Concurrent close/aclose callers join the same shutdown; serialize finalize retries. Close stops admission, drains accepted FIFO work, marks unfinished work incomplete, persists closure and attempts portability within the finite wait. `CloseResult` exposes `writer_stopped` (joined), `run_close_state` (`open`, `clean`, `incomplete`, or null if unknown), `portable` (boolean), and `reason` (`null`, `timeout`, `writer_running`, `busy`, `storage_error`, `unexpected_mode`, or `invalid_checkpoint`). `portable=true` requires joined owner/closed connections, verified DELETE and a successful fresh `mode=ro` read; it does not require a clean run. Clean means orderly committed closure without capture loss or unfinished observed work; it does not mean every boundary was available. An incomplete recording can be portable. Timeout returns not-ready; it does not restart capture or cancel host work. When the `aclose` coroutine starts executing, validate timeout, establish its absolute caller deadline and request shutdown before awaiting executor capacity. Queue delay consumes that same budget. Async waiting never blocks the event loop; cancelling its waiter cancels the wait, not already-requested recorder shutdown. Merely creating an unexecuted coroutine does not initiate shutdown. Repeated close resumes waiting/returns current state.
+
+Unfinished model requests are matched against the current run's non-NULL response call IDs using one set query inside the existing closure transaction. Request multiplicity and NULL call/turn IDs remain meaningful; an unmatched unscoped request makes every affected turn partial. Neither the five-second default close budget nor any `CloseResult` field changes.
+
+One capture-time writer owns its write connection through closure; analysis uses read-only inspection or snapshots. `busy_timeout_ms` is a finite lock-wait budget, default **1,000 ms**. A competing lock that outlasts this budget can fail the writer. Admission is not durable commit: explicit `close`/`aclose` reports storage readiness. There is no capture-write retry, automatic recorder close or timing guarantee. Portability requires [Architecture §4](architecture.md#4-transactions-and-shutdown)'s journal-mode/checkpoint guard, DELETE verification and connection closure. Busy finalization retains files/diagnostics. `finalize` before writer join returns not-ready; afterward serialized retries create/use/close a separately owned connection without borrowing the stopped writer's connection. Already-DELETE is valid. Never delete sidecars manually, transfer a connection, or report timeout as successful finalization.
+
+
+After a busy close with `writer_stopped=true`, release caller-owned reader transactions/connections, make one bounded `rec.finalize(timeout=5.0)` attempt and inspect its actual `CloseResult`. If the writer is still running, continue bounded close/wait instead. Busy finalization alone does not establish capture corruption; the [receipt and health semantics](#2-receipts-scopes-and-identity) and close-result fields above remain authoritative.
+
+For an accessible live or unfinalized recording, prefer `fr snapshot SOURCE OUT` under the [snapshot contract](inspection.md#8-cli-and-local-snapshot); independent copies of a live main, WAL and SHM are not a safe snapshot. After a killed or stopped writer, preserve the original matched fileset before recovery and inspect/snapshot from a working copy when readable. Do not invent a missing WAL or durable health counters; a portable copy preserves the source's open/incomplete state.
+
+## 6. Operational logging
+
+Use the standard Python logger namespace `mcp_flightrecorder`. Each component uses `logging.getLogger(__name__)`; configure the package logger or an individual child in the host application before capture begins. The package adds a `NullHandler` and otherwise leaves application logging configuration unchanged. The [README](../README.md#operational-logging) contains a minimal application setup.
+
+| Logger | Events and levels |
+|---|---|
+| `mcp_flightrecorder._recorder` | INFO startup and clean portable closure; WARNING capture rejection/capacity loss and incomplete or pending closure; ERROR unexpected capture failure, lost admitted prerequisite or storage finalization error; DEBUG existing-destination refusal, post-close capture and internal storage verification. |
+| `mcp_flightrecorder._storage` | ERROR writer transaction, drain or closure failure, with a fixed stage and bounded numeric counts. |
+| `mcp_flightrecorder.integrations._common` | WARNING when an invocation first acquires a fixed evidence-loss reason, including when the caller omitted an evidence object. |
+| `mcp_flightrecorder._inspect_common` | DEBUG completed reads and expected input/selection refusals; WARNING schema, storage, WAL or deadline failures. |
+| `mcp_flightrecorder._snapshot` | INFO verified snapshot completion; DEBUG expected destination/input refusals; WARNING operational failure; ERROR failure to clean up newly owned output, including during interruption. |
+
+Capture rejection reasons and capacity-driven body loss are logged at most once per reason per recorder. The claim is atomic across concurrent producers and does not suppress health counters. Fatal capture/writer/prerequisite transitions have their own error events. Unchanged public close/finalize results are not repeated; a changed result is logged, so a timed-out or busy attempt can be followed by a successful portable result. A portable recording with incomplete capture logs at WARNING. Internal storage verification alone does not log public portability.
+
+Adapter warnings reuse each invocation's existing deduplicated loss tuple. Repeated failed stream projections therefore produce one warning for that reason in that invocation; a later invocation can report its own loss. Native SDK exceptions are left to the host's error handling. Intentional metadata retention, unavailable comparisons and missing optional attribution do not independently produce core warnings. There are no per-event success, per-token, SQL-query-text or payload logs.
+
+Messages contain only fixed categories, generated recorder run IDs, booleans and numeric counts. They exclude prompts, bodies, tool/client names, provider IDs, filesystem paths, SQL text/parameters, exception messages and tracebacks. Receipts, `health()`, SQLite evidence and inspection envelopes remain the authoritative diagnostic data; logging does not create additional recording facts or replace those interfaces.
+
+Logging calls run outside recorder admission/retry locks and after reader transactions close. A small shared emitter contains ordinary handler/filter/formatter exceptions so logging cannot turn a successful native call into a recorder failure. Application handlers still run synchronously on the emitting thread and can delay calls if they block. For slow file or network destinations, configure application-owned `logging.handlers.QueueHandler` and `QueueListener`; the library does not add its own queue, worker, retry policy or log files. The existing shutdown budget bounds owned waiting and SQLite work, not arbitrary application-handler I/O.
+
+Python's [library logging guidance](https://docs.python.org/3/howto/logging.html#configuring-logging-for-a-library) describes logger ownership and `NullHandler`; its [logging handlers reference](https://docs.python.org/3/library/logging.handlers.html#queuehandler) describes queued destinations.

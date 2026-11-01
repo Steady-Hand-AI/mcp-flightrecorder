@@ -1,0 +1,8 @@
+-r test.txt
+any-llm-sdk[ollama]>=1.29.0
+ollama>=0.6.3
+mcp-client-for-ollama>=0.35.1
+mcp>=2.1.1
+mcp-types>=2.1.1
+httpx>=0.28.1
+httpx2>=2.16.0

@@ -1,0 +1,228 @@
+"""Installed JSON command line for the shared, read-only inspection functions."""
+import argparse
+import json
+import sys
+
+from . import __version__
+from . import inspect
+from ._inspect_common import (InspectionError, encode, error_envelope, run_read,
+                              validate_id, validate_int, validate_path, validate_timeout)
+from ._snapshot import snapshot
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        raise InspectionError("invalid_request", "invalid_cli", "The command or its arguments are invalid; use fr --help for the supported syntax.")
+
+
+def _common(parser):
+    parser.add_argument("--max-output-bytes", type=int, default=65_536)
+    parser.add_argument("--no-content", action="store_true")
+
+
+def _run_options(parser):
+    _common(parser)
+    parser.add_argument("--run")
+    parser.add_argument("--timeout", type=float, default=10.0)
+
+
+def _parser():
+    parser = Parser(prog="fr", description="Inspect retained recording evidence as bounded JSON.")
+    parser.add_argument("--version", action="version", version="mcp-flightrecorder " + __version__)
+    commands = parser.add_subparsers(dest="command", required=True, parser_class=Parser)
+    runs = commands.add_parser("runs", help="List recorded runs.")
+    runs.add_argument("database")
+    _common(runs)
+    runs.add_argument("--limit", type=int, default=50)
+    runs.add_argument("--cursor")
+    check = commands.add_parser("check", help="Check integrity and evidence availability.")
+    check.add_argument("database")
+    _run_options(check)
+    check.add_argument("--expect")
+    turns = commands.add_parser("turns", help="Find recorded turns.")
+    turns.add_argument("database")
+    _run_options(turns)
+    turns.add_argument("--limit", type=int, default=50)
+    turns.add_argument("--cursor")
+    for name in ("condition-key", "host-outcome", "capture-state"):
+        turns.add_argument("--" + name)
+    for name in ("tool-error", "text-mismatch", "unattributed-operation", "forwarded-change"):
+        turns.add_argument("--" + name, choices=("true", "false"))
+    explain = commands.add_parser("explain", help="Explain one turn or model call.")
+    explain.add_argument("database")
+    explain.add_argument("--turn", required=True)
+    explain.add_argument("--model-call")
+    _run_options(explain)
+    payload = commands.add_parser("payload", help="Read explicitly requested retained content.")
+    payload.add_argument("database")
+    payload.add_argument("artifact_id")
+    payload.add_argument("--offset", type=int, default=0)
+    payload.add_argument("--max-bytes", type=int, default=4096)
+    _run_options(payload)
+    graph = commands.add_parser("slice", help="Follow explicit submitted-input ancestry.")
+    graph.add_argument("database")
+    graph.add_argument("request_event_id")
+    graph.add_argument("--limit", type=int, default=1000)
+    graph.add_argument("--max-depth", type=int, default=12)
+    _run_options(graph)
+    query = commands.add_parser("sql", help="Run one explicit bounded SELECT or WITH query.")
+    query.add_argument("database")
+    query.add_argument("sql")
+    query.add_argument("--params")
+    query.add_argument("--limit", type=int, default=200)
+    query.add_argument("--timeout", type=float, default=10.0)
+    _common(query)
+    commands.add_parser("schema", help="Describe the installed inspection contract.")
+    copy = commands.add_parser("snapshot", help="Create one new portable local recording copy.")
+    copy.add_argument("database")
+    copy.add_argument("output")
+    copy.add_argument("--timeout", type=float, default=10.0)
+    return parser
+
+
+def _operation(command):
+    return {"turns": "find_turns", "sql": "query"}.get(command, command if command in {
+        "check", "explain", "payload", "slice", "runs", "schema", "snapshot"} else "schema")
+
+
+def _expect(value):
+    if value is None:
+        return None
+    items = value.split(",")
+    if len(items) != len(set(items)) or any(item not in {"model", "host", "mcp"} for item in items):
+        raise InspectionError("invalid_request", "invalid_expect", "Expect requires a nonempty comma-separated list of distinct model, host or mcp boundaries.")
+    return items
+
+
+def _params(value):
+    if value is None:
+        return None
+
+    def nonfinite(value):
+        raise ValueError("nonfinite")
+
+    try:
+        result = json.loads(value, parse_constant=nonfinite)
+    except (ValueError, RecursionError):
+        raise InspectionError("invalid_request", "invalid_params", "SQL parameters must be a valid JSON array or object.") from None
+    if type(result) not in (list, dict):
+        raise InspectionError("invalid_request", "invalid_params", "SQL parameters must be a JSON array or object.")
+    return result
+
+
+def _filters(args):
+    result = {}
+    for name in ("condition_key", "host_outcome", "capture_state"):
+        value = getattr(args, name)
+        if value is not None:
+            validate_id(value, name)
+            if name == "capture_state" and value not in {"complete", "partial", "unknown"}:
+                raise InspectionError("invalid_request", "invalid_filters", "capture_state must be complete, partial or unknown.")
+            result[name] = value
+    for name in ("tool_error", "text_mismatch", "unattributed_operation", "forwarded_change"):
+        value = getattr(args, name)
+        if value is not None:
+            result[name] = value == "true"
+    return result
+
+
+def _validate_scoped(args):
+    validate_timeout(args.timeout)
+    validate_path(args.database)
+    validate_int(args.max_output_bytes, 1024, 1_048_576, "max_output_bytes")
+    if args.run is not None:
+        validate_id(args.run, "run_id")
+    if args.command == "turns":
+        validate_int(args.limit, 1, 200, "limit")
+        _filters(args)
+    elif args.command == "check":
+        _expect(args.expect)
+    elif args.command == "explain":
+        validate_id(args.turn, "turn_id")
+        if args.model_call is not None:
+            validate_id(args.model_call, "model_call_id")
+    elif args.command == "payload":
+        validate_id(args.artifact_id, "artifact_id")
+        validate_int(args.offset, 0, 2 ** 63 - 1, "offset")
+        validate_int(args.max_bytes, 4, 65_536, "max_bytes")
+    elif args.command == "slice":
+        validate_id(args.request_event_id, "request_event_id")
+        validate_int(args.limit, 1, 1000, "limit")
+        validate_int(args.max_depth, 0, 12, "max_depth")
+
+
+def _infer_run(args):
+    def select(ctx):
+        rows = ctx.connection.execute("SELECT run_id FROM runs LIMIT 2").fetchall()
+        if len(rows) != 1:
+            raise InspectionError("invalid_request", "ambiguous_run", "The recording does not contain exactly one run; use fr runs and select --run explicitly.")
+        return {"run_id": rows[0]["run_id"]}
+
+    return run_read(_operation(args.command), args.database, {}, select,
+                    max_output_bytes=args.max_output_bytes, no_content=args.no_content, timeout=args.timeout)
+
+
+def _scoped(args, run_id):
+    common = {"max_output_bytes": args.max_output_bytes, "no_content": args.no_content, "timeout": args.timeout}
+    if args.command == "check":
+        return inspect.check(args.database, run_id, _expect(args.expect), **common)
+    if args.command == "turns":
+        return inspect.find_turns(args.database, run_id, filters=_filters(args),
+                                  limit=args.limit, cursor=args.cursor, **common)
+    if args.command == "explain":
+        return inspect.explain(args.database, run_id, args.turn, args.model_call, **common)
+    if args.command == "payload":
+        return inspect.payload(args.database, run_id, args.artifact_id, args.offset, args.max_bytes, **common)
+    return inspect.slice(args.database, run_id, args.request_event_id, limit=args.limit,
+                         max_depth=args.max_depth, **common)
+
+
+def _dispatch(args):
+    if args.command == "schema":
+        return inspect.schema()
+    if args.command == "snapshot":
+        return snapshot(args.database, args.output, timeout=args.timeout)
+    common = {"max_output_bytes": args.max_output_bytes, "no_content": args.no_content}
+    if args.command == "runs":
+        return inspect.runs(args.database, limit=args.limit, cursor=args.cursor, **common)
+    if args.command == "sql":
+        return inspect.query(args.database, args.sql, _params(args.params), limit=args.limit,
+                             timeout=args.timeout, **common)
+    _validate_scoped(args)
+    if args.command == "payload" and args.no_content:
+        return error_envelope("payload", "content_disabled", "no_content", "Explicit content access is disabled by this output policy.")
+    run_id = args.run
+    if run_id is None:
+        selected = _infer_run(args)
+        if not selected["ok"]:
+            return selected
+        run_id = selected["data"]["run_id"]
+    return _scoped(args, run_id)
+
+
+def exit_status(result):
+    if not result["ok"]:
+        return 3 if result["error"]["code"] in {"incompatible_schema", "recording_unreadable", "recording_open_wal"} else 1
+    if result["operation"] == "check":
+        return {"fail": 2, "unknown": 4}.get(result["data"]["status"], 0)
+    return 0
+
+
+def main():
+    """Emit one result; expected errors never include arbitrary parser input."""
+    arguments = sys.argv[1:]
+    operation = _operation(arguments[0] if arguments else None)
+    try:
+        try:
+            args = _parser().parse_args(arguments)
+            result = _dispatch(args)
+        except (InspectionError, argparse.ArgumentError) as error:
+            if isinstance(error, InspectionError):
+                result = error_envelope(operation, error.code, error.reason, error.message)
+            else:
+                result = error_envelope(operation, "invalid_request", "invalid_cli", "The command arguments are invalid; use fr --help.")
+        serialized = encode(result).decode("utf-8")
+        sys.stdout.write(serialized + "\n")
+        return exit_status(result)
+    except KeyboardInterrupt:
+        return 130

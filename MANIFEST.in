@@ -1,0 +1,31 @@
+include README.md CHANGELOG.md
+recursive-include src *.py
+recursive-include sql *.sql
+recursive-include tests *.py *.json
+recursive-include compatibility_tests *.py
+recursive-include examples *.py
+recursive-include requirements *.txt
+recursive-include docs *.md *.html
+
+# Local/private material must not enter source distributions.
+prune .git
+prune .agents
+prune .codex
+prune .claude
+prune internal
+prune private
+prune review
+prune playbook
+prune skills
+prune handoff
+prune evidence
+prune work
+prune archive
+prune build
+prune dist
+prune .venv
+prune venv
+prune .pytest_cache
+global-exclude AGENTS.md CLAUDE.md SKILL.md PLAN.md PLAN.html TASK.md NEXT_TASK.md REVIEW.md RESULT.md CURRENT_STATE.md IDENTITY.json ISSUES.json
+global-exclude .env .env.* *.pem *.key *.p12 *.pfx .DS_Store
+global-exclude *.py[cod] *.sqlite *.sqlite-* *.db *.log *.zip *.whl *.tar.gz *.jsonl

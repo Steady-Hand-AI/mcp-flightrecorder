@@ -1,0 +1,219 @@
+# Development and testing
+
+**Package 0.5.16.** Tests exercise an installed wheel and generate mutable recordings under temporary directories. Independent scenario expectations live in ordinary pytest tests.
+
+## 1. Qualify the SDK-free core
+
+Contributor recipes accept an available supported **GIL-enabled CPython 3.11+**, using normal assertions. Record the actual executable, Python and SQLite versions, hashes and dependency origins for each run; a passing run does not establish coverage on every supported interpreter. Package metadata declares `>=3.11`. The focused model/MCP retention selection is in §6.
+
+A missing interpreter or unresolved dependency leaves dependent coverage unexecuted; a suite that starts and fails, crashes or times out remains failed or incomplete. The recipes below are test procedures, not claims of completed qualification.
+
+Run from a clean checkout. Set `MFR_PYTHON` to select an interpreter, or use the available `python3` default. The disposable build copy keeps metadata and generated files outside the source tree; do not chmod an existing private directory:
+
+```sh
+mfr_python=$(command -v "${MFR_PYTHON:-python3}") || exit 1
+"$mfr_python" -I -B - <<'PYTHON'
+import sys, sqlite3
+assert sys.implementation.name == "cpython"
+assert sys.version_info[:2] >= (3, 11)
+assert sys.version_info.releaselevel == "final"
+assert getattr(sys, "_is_gil_enabled", lambda: True)()
+assert not sys.flags.optimize
+print(sys.version, sqlite3.sqlite_version, sys.executable)
+PYTHON
+product_dir=$(pwd -P)
+work_dir=$(mktemp -d /tmp/mfr-python-XXXXXX)
+chmod 0711 "$work_dir"  # traversal only on this newly created owned ancestor
+(
+    umask 022
+    cp -R "$product_dir" "$work_dir/source"
+    "$mfr_python" -m venv "$work_dir/build-env"
+    "$work_dir/build-env/bin/python" -I -B -m pip install build setuptools packaging
+    "$work_dir/build-env/bin/python" -I -B -m build --no-isolation --wheel --sdist --outdir "$work_dir/dist" "$work_dir/source"
+    "$mfr_python" -m venv "$work_dir/core-env"
+    "$work_dir/core-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.16-py3-none-any.whl"
+    "$work_dir/core-env/bin/python" -m pip install -r "$product_dir/requirements/test.txt"
+)
+"$work_dir/core-env/bin/python" -m pip check
+"$work_dir/core-env/bin/fr" --version
+"$work_dir/core-env/bin/python" -I -c 'import mcp_flightrecorder as m; print(m.__version__, m.__file__)'
+
+```
+
+Run the following **19-module SDK-free suite** after the build and installation above. Six other inspection modules use the real OpenAI/MCP-backed integration recording fixture and run with the four SDK main modules in the **separate integration environment** in §2. Do not skip them or substitute mocked SDKs.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir" \
+    "$work_dir/core-env/bin/python" -m pytest -n 4 -p no:cacheprovider \
+    tests/test_admission.py tests/test_async_shutdown.py tests/test_bindings.py \
+    tests/test_capture_values.py tests/test_comparisons.py tests/test_contract.py \
+    tests/test_core.py tests/test_deferred.py tests/test_duplicate_transition.py \
+    tests/test_failures.py tests/test_finalization.py tests/test_fixture.py \
+    tests/test_inspection_logging.py tests/test_inspection_query.py \
+    tests/test_inspection_snapshot.py tests/test_logging.py \
+    tests/test_scope_validation.py tests/test_shutdown.py tests/test_scale_regressions.py
+```
+
+Check that `mcp_flightrecorder.__file__` points to the installed venv, never `src/`. The four additional SDK-specific main modules are `test_integration_fixture.py`, `test_integration_history.py`, `test_mcp_client.py` and `test_openai_chat.py`. Collection alone does not qualify them.
+
+The new disposable root's mode `0711` and `umask 022` allow the ordinary-user snapshot-media subprocess to traverse the newly created environment. Its chosen Python executable and all ancestors must also be executable by the ordinary user. A root-run permission case must be permitted to drop UID/GID; otherwise its explicit capability skip records a limitation, **not** a passing case. Never loosen the media-directory permissions that the case is testing, chmod an existing private virtualenv, or convert import/snapshot failures into skips. Use the per-command `TMPDIR` so its media fixture lives below a traversable parent.
+
+The SDK-free quickstart can be exercised with the installed CLI and a disposable destination:
+
+```sh
+recording_dir=$(mktemp -d)
+"$work_dir/core-env/bin/python" -I -B examples/quickstart.py "$recording_dir/quickstart.sqlite"
+"$work_dir/core-env/bin/fr" turns "$recording_dir/quickstart.sqlite"
+"$work_dir/core-env/bin/fr" snapshot "$recording_dir/quickstart.sqlite" "$recording_dir/copy.sqlite"
+"$work_dir/core-env/bin/fr" runs "$recording_dir/copy.sqlite"
+```
+
+Snapshot checks require the copied main database to be independently readable, portable and in SQLite DELETE mode. The source must remain byte-identical. A partial quickstart may have unknown coverage; a portable snapshot does not invent complete observations.
+
+## 2. SDK-specific main tests and optional compatibility environments
+
+The **ten-module integration selection** runs in a separate fresh environment created with the same selected interpreter. It comprises four adapter/fixture modules and six SDK-backed inspection modules. Install the same wheel first, then `requirements/test.txt` together with `requirements/integration.txt` (direct dependencies, resolved by pip):
+
+```sh
+"$mfr_python" -m venv "$work_dir/integration-env"
+"$work_dir/integration-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.16-py3-none-any.whl"
+"$work_dir/integration-env/bin/python" -m pip install -r requirements/test.txt -r requirements/integration.txt
+"$work_dir/integration-env/bin/python" -m pip check
+PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir" \
+    "$work_dir/integration-env/bin/python" -m pytest -n 4 -p no:cacheprovider \
+    tests/test_integration_fixture.py tests/test_integration_history.py \
+    tests/test_mcp_client.py tests/test_openai_chat.py \
+    tests/test_inspection_checks.py tests/test_inspection_commands.py \
+    tests/test_inspection_content.py tests/test_inspection_inputs.py \
+    tests/test_inspection_navigation.py tests/test_inspection_slice.py
+```
+
+Each optional compatibility profile uses a **separate fresh venv** created with the same selected interpreter, the built wheel first, and *only* its own requirements file. These direct requirements each include `-r test.txt`; do not add the main integration profile or merge incompatible legacy and modern MCP API families.
+
+| Profile | Install requirements | Execute actual tests |
+|---|---|---|
+| Native / AnyLLM | `requirements/native.txt` | `compatibility_tests/native` |
+| Pydantic recipes | `requirements/recipes.txt` | `compatibility_tests/recipes` |
+| Fast-agent | `requirements/fast-agent.txt` | `compatibility_tests/fast_agent` |
+| FastMCP released API | `requirements/fastmcp.txt` | `compatibility_tests/fastmcp` |
+| Legacy MCP 1.x | `requirements/legacy.txt` | `compatibility_tests/legacy` |
+
+For example, run legacy alone with a new environment:
+
+```sh
+"$mfr_python" -m venv "$work_dir/legacy-env"
+"$work_dir/legacy-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.16-py3-none-any.whl"
+"$work_dir/legacy-env/bin/python" -m pip install -r requirements/legacy.txt
+"$work_dir/legacy-env/bin/python" -m pip check
+PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir" \
+    "$work_dir/legacy-env/bin/python" -m pytest -n 4 -p no:cacheprovider compatibility_tests/legacy
+```
+
+For another profile, use a new venv and substitute the corresponding requirements and test directory. Dependency resolution uses current released distributions, **not** an exact FastMCP GitHub archive. Lower SDK bounds are known exercised baselines, not a guarantee that the latest host APIs remain compatible. If an optional SDK cannot install or its actual native tests fail, record the resolved SDK versions and the failure; do not pin a replacement silently. Optional failure does not invalidate a separately passing SDK-free core, nor count as an SDK success.
+
+The main `run_sdk_async` watchdog defaults to 10 seconds, queued async shutdown waits use two seconds, and executing cancellation uses four. Native/recipe/legacy fixtures use 30 seconds; fast-agent uses 45; FastMCP uses a 30-second default for imported session-contract tests and 45 seconds for its four attachment scenarios. The integration producer has a 40-second coroutine watchdog and a 50-second parent subprocess deadline; the legacy host has a 50-second coroutine watchdog, while its long-lived peer terminates under host control. Shared fixtures and producer entrypoints use standard asyncio. Explicit caller timeouts still apply. Test data, peer IPC records and logs are generated in disposable directories.
+
+## 3. Independent scenario assertions
+
+[`tests/producers/record_core.py`](../tests/producers/record_core.py) produces the core scenario through the installed public API. [`tests/producers/minimal_host.py`](../tests/producers/minimal_host.py) produces the SDK integration scenario. The seven small files under `tests/fixtures/integration/` are declarative inputs and independent expectations.
+
+[`test_fixture.py`](../tests/test_fixture.py) checks the core timeline, associations and totals. [`test_integration_fixture.py`](../tests/test_integration_fixture.py) checks all ten integration scenario groups, including native host observations, exact links/occurrences, retained-body integrity, request reconstruction and canonical SQL results. The acceptance tests execute copied test producers in isolated subprocesses, copy only stopped main databases, and verify that fresh read-only checks leave database contents and directory entries unchanged. Parsed summaries stay in memory. The integration native/no-recorder comparison and existing-file refusal remain separate tests. `test_quickstart_runs_from_outside_the_checkout` also checks that the small public example runs against the installed package and writes one event.
+
+[`fixture_checks.py`](../tests/fixture_checks.py) contains six plain shared functions for typed JSON equality, retained bodies, decoded pointer replacement, request reconstruction, a named canonical SQL query and token assertions. Nested booleans, integers and floats remain distinct. Expected values come from literals or the declarative inputs; artifact-integrity and before/after database hashing remain independently checked.
+
+Run these fixture cases through pytest:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 "$work_dir/core-env/bin/python" -m pytest -p no:cacheprovider tests/test_fixture.py
+PYTHONDONTWRITEBYTECODE=1 "$work_dir/integration-env/bin/python" -m pytest -p no:cacheprovider tests/test_integration_fixture.py
+```
+
+The installed inspection contract is exercised by `test_inspection_commands.py` for API/CLI envelopes and parity; navigation tests for schema/discovery/paging/associations; checks for integrity; slice tests for graph ancestry/caps; content/query tests for payload/SQL/errors; and snapshot tests for portable copying and path/permission failures.
+
+For manual exploration, use the quickstart and read-only CLI with a new temporary destination (a coverage check on this partial trace is expected to be `unknown`):
+
+```sh
+recording_dir=$(mktemp -d)
+"$work_dir/core-env/bin/python" -I -B examples/quickstart.py "$recording_dir/quickstart.sqlite"
+"$work_dir/core-env/bin/fr" turns "$recording_dir/quickstart.sqlite"
+"$work_dir/core-env/bin/fr" snapshot "$recording_dir/quickstart.sqlite" "$recording_dir/copy.sqlite"
+```
+
+[`test_scale_regressions.py`](../tests/test_scale_regressions.py) adds SDK-independent checks for NULL-safe closure, per-capture connection ownership/fresh statements, snapshot-cache bounds and eviction, occurrence-specific comparison/diagnostic parity, first-witness authority and five timeout API/CLI routes. Focused cases verify that counting members preserves selection, order, deadlines and display diagnostics without building unused projections, and that link validation runs before operation lookups can evict cached membership facts. Further cases compare answer totals, mismatch flags and repeated diagnostics across both complete answer passes without discarded public records, and verify that current-request validation is reused only for the exact run and witness without adding cache retention. The member-guard cases compare complete typed occurrence rows and diagnostics against the original SQL for malformed/omitted bodies, scalar path types, selectors, limits and damaged duplicate artifacts. Invalid/nonmanifest-body cases also compare complete public check/find_turns envelopes. A four-request selector regression checks exact ordered request/decision/result identities and pointers, complete typed rows and diagnostics for list, one-shot generator and repeated decision IDs, empty/nonexistent selections, and combined request/decision selectors with LIMIT. A companion native-Context regression lowers SQLite's variable limit to eight and checks one run ID plus two request IDs plus four decision IDs plus LIMIT with list and generator selectors, along with an empty decision selector; only this regression records a capability limitation when the runtime lacks the limit API. The admission batching regression verifies ready FIFO drain after deadline expiry, separate item/byte caps and exact committed event order; existing sibling cases retain reservation, rollback and stop/drain coverage. Barrier-controlled tests verify commit visibility and cleanup without sleep-based races. Machine timings are not unit-test assertions; cache accounting and process RSS are separate measurements.
+
+[`test_capture_values.py`](../tests/test_capture_values.py) extends public request-path coverage from a dict root to a list root with shared ancestors and escaped tokens. Literal expected template, field and message bytes check key order, scalar types, masks, hashes, lengths, catalog identity and ordered membership; equal originals with complete empty bindings share one handle while retaining both occurrences. The existing writer-barrier case also submits a distinct retained request, checks both caller trees are unchanged by capture, mutates originals, retained descendants, policy and annotations before releasing the writer in `finally`, and verifies pre-mutation durable bytes, original observed sizes, policy metadata, membership, completeness and health after clean portable close. Distinct original messages remain separate handles even when their retained bodies are equal.
+
+The forty-request sharing case in [`test_bindings.py`](../tests/test_bindings.py) requires loss-free request receipts and waits on the existing recorder condition after each complete producer round until ordinary slots and pending identities drain. Its five-second bound checks fixture liveness, with no sleep, queue-limit change or throughput assertion. Clean, stopped, portable close is required; all original expectations remain: 40 requests, 158 events, 78 answer links, 2,340 members, 1,560 linked answer occurrences, per-request history sizes and the stored-byte sharing bound.
+
+Capture-history tests use public Recorder observations and independent SQLite assertions. Slice and snapshot tests exercise the installed Python API and `fr` command. Compatibility tests retain the six JSON files actually consumed across test/subprocess boundaries, plus peer/server JSONL and SQLite fixtures; all such output stays in temporary directories.
+
+## 4. Source-package hygiene
+
+The source package contains current code, meaningful tests, the seven declarative JSON inputs, examples, requirements, build configuration and documentation. Generated SQLite recordings/sidecars, run summaries, logs, test reports, coverage output, screenshots, environments, caches, wheels, benchmark data and nested release archives are excluded.
+
+Distribution checks cover source and wheel builds, installed `fr --version`, dependency consistency and local documentation links. A fresh extraction verifies the actual archive inventory. Version control retains project history; source packages contain the current implementation and public documentation.
+
+
+## 5. Operational logging regressions
+
+The main suite exercises standard logging through actual Recorder, adapter, reader and CLI behavior. `test_logging.py` covers default silence/root-configuration ownership, concurrent bounded capacity warnings, content omission versus metadata policy, and failed application handlers. Existing writer/finalization cases also verify incomplete-closure warnings and that public portability is not logged before the retry owner exits. OpenAI adapter cases preserve exact native returns, exceptions, cancellation and consumed chunks with capture/logging failures. `test_inspection_logging.py` covers safe fields, deadline precedence, released connections, final snapshot cleanup outcomes and producer-to-reader comparison reasons.
+
+These cases collect log records in memory or use temporary subprocess output. They do not check in emitted logs or assert private logger method call counts. Slow handler destinations remain an application concern; tests use bounded handlers and existing asynchronous watchdogs.
+
+## 6. Focused selective-retention tests
+
+Use two profiles with one normally installed wheel: an SDK-free core and a combined MCP/OpenAI/AnyLLM/Ollama environment. The latter uses the integration requirements plus AnyLLM, Ollama and httpx. MCP Client/session checks remain in this selection because they share the retention-policy guard with model adapters. The full main integration suite and separate optional host profiles are documented in §2.
+
+Build from a new disposable copy after source, test or document changes, then install and test that wheel. Keep environments, build copies, JUnit and temporary peer/recording data outside the checkout. Reuse the supported GIL-enabled CPython selected and checked in §1, recording its actual Python and SQLite versions. Only a newly created owned work ancestor gets traversal permission for the existing unprivileged tests; their fixture/database permissions remain unchanged.
+
+After the fresh external build and core setup in §1, create the one current SDK profile:
+
+```sh
+"$mfr_python" -I -B -m venv "$work_dir/current-env"
+"$work_dir/current-env/bin/python" -I -B -m pip install -r requirements/test.txt -r requirements/integration.txt 'any-llm-sdk[ollama]>=1.29.0' 'ollama>=0.6.3' 'httpx>=0.28.1'
+"$work_dir/core-env/bin/python" -I -B -m pip install --force-reinstall --no-deps "$work_dir/dist/mcp_flightrecorder-0.5.16-py3-none-any.whl"
+"$work_dir/current-env/bin/python" -I -B -m pip install --force-reinstall --no-deps "$work_dir/dist/mcp_flightrecorder-0.5.16-py3-none-any.whl"
+"$work_dir/core-env/bin/python" -I -B -m pip check
+"$work_dir/current-env/bin/python" -I -B -m pip check
+mkdir -p "$work_dir/results/tmp"
+"$work_dir/current-env/bin/python" -I -B -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); s.close()'
+```
+
+The following selection runs nineteen core modules and seven SDK modules from the product directory, sequentially with four workers. It focuses on retention and shared lifecycle behavior; use §2 for the full ten-module main integration suite. Both commands use normal assertions and the installed pytest/xdist/pytest-check plugins' ordinary autoload. Unset `PYTEST_DISABLE_PLUGIN_AUTOLOAD`; do not also load pytest-check under a second plugin name. Clear `PYTEST_ADDOPTS` so inherited selection, plugin or worker options cannot alter the selection.
+
+```sh
+env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOLOAD -u PYTEST_ADDOPTS PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir/results/tmp" \
+  "$work_dir/core-env/bin/python" -I -B -m pytest -n 4 -p no:cacheprovider \
+  --junitxml="$work_dir/results/core.xml" \
+  tests/test_admission.py tests/test_async_shutdown.py tests/test_bindings.py \
+  tests/test_capture_values.py tests/test_comparisons.py tests/test_contract.py \
+  tests/test_core.py tests/test_deferred.py tests/test_duplicate_transition.py \
+  tests/test_failures.py tests/test_finalization.py tests/test_fixture.py \
+  tests/test_inspection_logging.py tests/test_inspection_query.py \
+  tests/test_inspection_snapshot.py tests/test_logging.py tests/test_scope_validation.py \
+  tests/test_shutdown.py tests/test_scale_regressions.py
+
+env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOLOAD -u PYTEST_ADDOPTS PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir/results/tmp" \
+  "$work_dir/current-env/bin/python" -I -B -m pytest -n 4 -p no:cacheprovider \
+  --junitxml="$work_dir/results/current-sdk.xml" \
+  tests/test_mcp_client.py tests/test_openai_chat.py \
+  tests/test_integration_history.py tests/test_integration_fixture.py \
+  tests/test_inspection_navigation.py \
+  compatibility_tests/native/test_session.py compatibility_tests/native/test_anyllm.py
+```
+
+Record command exits, JUnit outcomes, worker/plugin versions and installed package origins. Preserve parametrized test identities and report failures, errors, crashes and skips separately. Keep malformed-model serializer warnings visible. Collection is not execution, and focused counts overlap aggregate counts.
+
+The shared detailed model-policy checks live in [`test_openai_chat.py`](../tests/test_openai_chat.py), using the genuine OpenAI client and existing test transport. They distinguish three independent body selections, exact invocation context, native/callback ownership, literal retained bytes/hash/lengths, original per-part observed lengths, available original decision comparisons, request membership and original binding/insertion evidence. The bounded topology matrix covers null, missing messages/tools, non-array messages, changed count and recognizable reordering alongside valid per-position replacement. Intentional/failure omission retains structural request references and source completeness; JSON-null decision/response content is distinct from omission.
+
+Model lifecycle controls cover ordinary error, callback cancellation and callback `None` with fixed omission and one bounded loss/log per invocation, plus valid/invalid-policy metadata precedence, factory validation, lazy work, captured scope, MISSING and overlapping context. Separate process-control checks exercise request, decision and terminal interruption, including a streamed decision. The complete and early-close stream cases preserve consumed chunk identity/order and original partial state without draining unread chunks; existing projection/overflow/error/cancellation tests remain neighboring controls. Catching and resuming after process-control interruption does not acquire an automatic-cleanup or at-most-once guarantee.
+
+[`native/test_anyllm.py`](../compatibility_tests/native/test_anyllm.py) owns the focused second-factory route using the genuine AnyLLM/Ollama provider and existing transport/conversion fixtures. It checks original positional/keyword/options conversion, native normal/stream identities, independent retained request/decision/response bodies, context and attribution, never-awaited work and consumed-stream/early-close cleanup. It does not duplicate the full OpenAI structural/failure matrix.
+
+Existing core retention coverage in [`test_capture_values.py`](../tests/test_capture_values.py), shared MCP policy coverage in [`test_mcp_client.py`](../tests/test_mcp_client.py), and the current [`native/test_session.py`](../compatibility_tests/native/test_session.py) remain part of the two aggregates. The MCP module owns the detailed nine-mechanism generic mapping-error matrix. Model events retain their model-call associations; they are not MCP operation reservations.
+
+The stream budget cases cover separate raw/fragment accounting, exact and one-byte-over admission, 64/65 state bounds, released fragment reuse, late complete decisions on and after raw overflow, and continued conservative handling of real gaps, EOF, close, error and cancellation. Content and metadata modes preserve exact policy inputs, native chunk identity/order, and decision availability before the finishing read returns; a delegating encoding spy proves that later discarded full projections are not serialized again. The genuine AnyLLM/Ollama case covers the same late-decision behavior through native provider conversion.
+
+[`test_inspection_query.py`](../tests/test_inspection_query.py) covers below-cap analysis with a small envelope, real SQLite too-big API/CLI errors at both output limits, native `printf`/`format` behavior (successful NULL or `SQLITE_TOOBIG`, depending on SQLite), a legitimately retained large body with independent small metadata and payload-prefix reads, and fetch-time failure after an observed row with no partial data, deadline precedence and cleanup. [`test_inspection_navigation.py`](../tests/test_inspection_navigation.py) asserts the fixed discovery limit; its eager integration fixture requires the SDK profile. Existing accepted scope and lifecycle regressions remain in the selections.
+
+These checks use controlled local transports and require no live provider credentials or model downloads. They establish the selected retention behavior; they do not measure throughput or memory capacity under a production host workload. Run the separate optional profiles in §2 when validating those integrations.

@@ -1,0 +1,7 @@
+-r test.txt
+pydantic-ai-slim>=2.59.0
+openai>=3.35.1
+mcp>=2.3.0
+mcp-types>=2.3.0
+httpx2>=2.15.1
+fastmcp>=4.1.3

@@ -1,0 +1,6 @@
+-r test.txt
+fast-agent-mcp>=0.10.47
+mcp>=2.3.0
+mcp-types>=2.3.0
+openai>=3.35.1
+httpx2>=2.16.0

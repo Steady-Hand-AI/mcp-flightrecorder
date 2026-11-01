@@ -1,0 +1,6 @@
+-r test.txt
+# This isolated historical integration exercises MCP 1.x / mcp-agent 0.2 APIs.
+mcp>=1.23.1,<2
+mcp-agent>=0.2.6,<0.3
+openai>=1.75.0,<2
+httpx>=0.28.1

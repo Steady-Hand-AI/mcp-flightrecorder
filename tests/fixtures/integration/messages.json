@@ -1,0 +1,70 @@
+{
+  "SYS": {
+    "role": "system",
+    "content": "Deterministic MCP integration fixture."
+  },
+  "U": {
+    "role": "user",
+    "content": "Echo alpha and beta, then summarize the results."
+  },
+  "A": {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+      {
+        "id": "call-alpha",
+        "type": "function",
+        "function": {
+          "name": "echo",
+          "arguments": "{\"text\":\"alpha-selected\"}"
+        }
+      },
+      {
+        "id": "call-beta",
+        "type": "function",
+        "function": {
+          "name": "echo",
+          "arguments": "{\"text\":\"beta\"}"
+        }
+      }
+    ]
+  },
+  "B1": {
+    "role": "tool",
+    "tool_call_id": "call-alpha",
+    "content": "alpha-executed"
+  },
+  "B2": {
+    "role": "tool",
+    "tool_call_id": "call-beta",
+    "content": "beta-submitted"
+  },
+  "S": {
+    "role": "system",
+    "content": "Results: alpha-executed, beta."
+  },
+  "P1": {
+    "role": "system",
+    "content": "Retain the earlier tool evidence."
+  },
+  "F1m": {
+    "role": "assistant",
+    "content": "Both results recorded."
+  },
+  "U2": {
+    "role": "user",
+    "content": "Use retained context without selecting a tool."
+  },
+  "F2m": {
+    "role": "assistant",
+    "content": "No new tool call."
+  },
+  "U3": {
+    "role": "user",
+    "content": "Recheck the same request without selecting tools."
+  },
+  "F3m": {
+    "role": "assistant",
+    "content": "History checked."
+  }
+}

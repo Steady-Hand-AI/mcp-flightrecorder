@@ -1,0 +1,65 @@
+{
+  "W1": {
+    "id": "fixture-w1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "fixture-model",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "Both results recorded."
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 3,
+      "completion_tokens": 5,
+      "total_tokens": 8
+    }
+  },
+  "W2": {
+    "id": "fixture-w2",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "fixture-model",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "No new tool call."
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 3,
+      "completion_tokens": 5,
+      "total_tokens": 8
+    }
+  },
+  "W3": {
+    "id": "fixture-w3",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "fixture-model",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "History checked."
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 3,
+      "completion_tokens": 5,
+      "total_tokens": 8
+    }
+  }
+}

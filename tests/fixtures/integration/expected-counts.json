@@ -1,0 +1,18 @@
+{
+  "runs": 1,
+  "turns": 2,
+  "events": 19,
+  "model_requests": 4,
+  "model_responses": 4,
+  "decisions": 2,
+  "operations": 3,
+  "request_members": 26,
+  "answer_occurrences": 6,
+  "findings": 0,
+  "links": {
+    "dispatch_source": 2,
+    "answers": 2,
+    "transformed_from": 2,
+    "inserted_into": 1
+  }
+}

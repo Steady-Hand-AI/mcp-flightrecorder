@@ -178,7 +178,7 @@ class PackageGuardTests(unittest.TestCase):
             ):
                 with self.subTest(reason=reason):
                     self.assertIn(original, data)
-                    wheel = self.wheel_copy(replacement=(metadata, data.replace(original, changed)))
+                    wheel = self.wheel_copy(replacement=(metadata, data.replace(original, changed, 1)))
                     with self.assertRaisesRegex(guard.Rejected, reason):
                         guard.check(self.source, wheel)
             wheel = self.wheel_copy(replacement=(record, archive.read(record).replace(b"sha256=", b"sha256=X", 1)))

@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 import tomllib
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
@@ -25,6 +26,8 @@ API_ROOT = f"/repos/{REPOSITORY}"
 SHA = re.compile(r"[0-9a-f]{40}")
 MAX_JSON = 2 * 1024 * 1024
 MAX_ASSET = 64 * 1024 * 1024
+CONFIRM_ATTEMPTS = 6
+CONFIRM_DELAY = 2
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -86,9 +89,11 @@ class GitHubClient:
         if blob is None:
             return None
         try:
-            return strict_json(blob)
+            value = strict_json(blob)
         except (UnicodeError, ValueError):
             raise ReleaseError("GitHub returned invalid JSON") from None
+        require(value is not None, "GitHub returned a null JSON response")
+        return value
 
     def get_json(self, path, *, allow_404=False):
         return self.request("GET", path, allow_404=allow_404)
@@ -340,20 +345,34 @@ def verify_promotion_artifact(manifest: dict, env, client=None):
             _timestamp(producer.get("completed_at")), "Candidate artifact was not created during its producing job")
 
 
-def _release_state(client, notes, blobs):
-    releases = client.pages(API_ROOT + "/releases")
-    require(all(isinstance(release, dict) for release in releases), "Invalid release listing")
-    matching = [release for release in releases if isinstance(release, dict) and release.get("tag_name") == TAG]
-    require(len(matching) <= 1, "Multiple releases use the planned tag")
-    if not matching:
-        return None, set()
-    release = matching[0]
+def _release_metadata(release, notes, release_id=None):
+    release = _object(release)
     _positive_id(release.get("id"))
+    require((release_id is None or release["id"] == release_id) and release.get("tag_name") == TAG,
+            "Release identity conflicts")
     require(release.get("name") == f"MCP Flight Recorder {VERSION}" and release.get("prerelease") is False and
             type(release.get("draft")) is bool and isinstance(release.get("body"), str) and
             release["body"] in {notes, notes.removesuffix("\n")},
             "Existing release metadata conflicts")
+    return release
+
+
+def _release_state(client, notes, blobs, release_id=None):
+    if release_id is None:
+        releases = client.pages(API_ROOT + "/releases")
+        require(isinstance(releases, list) and all(isinstance(release, dict) for release in releases),
+                "Invalid release listing")
+        matching = [release for release in releases if release.get("tag_name") == TAG]
+        require(len(matching) <= 1, "Multiple releases use the planned tag")
+        release = matching[0] if matching else None
+    else:
+        _positive_id(release_id)
+        release = client.get_json(API_ROOT + f"/releases/{release_id}", allow_404=True)
+    if release is None:
+        return None, set()
+    release = _release_metadata(release, notes, release_id)
     assets = client.pages(API_ROOT + f"/releases/{release['id']}/assets")
+    require(isinstance(assets, list), "Invalid existing asset listing")
     seen = set()
     for asset in assets:
         require(isinstance(asset, dict), "Invalid existing asset")
@@ -362,12 +381,28 @@ def _release_state(client, notes, blobs):
                 "Existing asset inventory conflicts")
         seen.add(name)
         require(type(asset.get("size")) is int and asset["size"] == len(blobs[name]), "Existing asset size conflicts")
+        _positive_id(asset.get("id"))
         require(client.download_asset(asset.get("id"), asset["size"]) == blobs[name], "Existing asset bytes conflict")
     return release, seen
 
 
-def finalize_release(bundle: Path, manifest: dict, notes: str, recheck, client=None):
-    """Resume matching state; never delete or replace an existing public object."""
+def _confirm_release(client, notes, blobs, release_id, phase, sleep):
+    """Only read after a known mutation: at most five two-second waits per phase."""
+    for attempt in range(CONFIRM_ATTEMPTS):
+        release, present = _release_state(client, notes, blobs, release_id)
+        if release is not None:
+            if phase == "draft":
+                require(release["draft"], "Created release is not a draft")
+                return release, present
+            if present == set(blobs) and (phase == "assets" or release["draft"] is False):
+                return release, present
+        if attempt + 1 < CONFIRM_ATTEMPTS:
+            sleep(CONFIRM_DELAY)
+    raise ReleaseError(f"Release {phase} confirmation exhausted")
+
+
+def finalize_release(bundle: Path, manifest: dict, notes: str, recheck, client=None, *, sleep=time.sleep):
+    """Resume exact state; three confirmation phases schedule at most 30 seconds total."""
     client = client or GitHubClient()
     require(os.environ.get("RELEASE_MODE") == "staged-release", "GitHub finalization requires staged-release mode")
     require(isinstance(notes, str) and notes.strip(), "Curated release notes are required")
@@ -388,23 +423,35 @@ def finalize_release(bundle: Path, manifest: dict, notes: str, recheck, client=N
     published = False
     if release is None:
         before_mutation()
-        client.request("POST", API_ROOT + "/releases", {
+        response = client.request("POST", API_ROOT + "/releases", {
             "tag_name": TAG, "target_commitish": manifest["commit"], "name": f"MCP Flight Recorder {VERSION}",
             "body": notes, "draft": True, "prerelease": False,
         })
-        release, present = _release_state(client, notes, blobs)
-        require(release is not None and release["draft"], "New release draft is unverified")
+        response = _release_metadata(response, notes)
+        require(response["draft"], "Created release is not a draft")
+        release, present = _confirm_release(client, notes, blobs, response["id"], "draft", sleep)
+    release_id = release["id"]
     for name in sorted(set(blobs) - present):
         before_mutation()
-        client.upload_asset(release["id"], name, blobs[name])
+        response = _object(client.upload_asset(release_id, name, blobs[name]))
+        _positive_id(response.get("id"))
+        require(response.get("name") == name and response.get("state") == "uploaded" and
+                type(response.get("size")) is int and response["size"] == len(blobs[name]),
+                "Uploaded asset acknowledgment conflicts")
         uploaded.append(name)
-    release, present = _release_state(client, notes, blobs)
+    if uploaded:
+        release, present = _confirm_release(client, notes, blobs, release_id, "assets", sleep)
+    else:
+        release, present = _release_state(client, notes, blobs, release_id)
     require(release is not None and present == set(blobs), "Release remains incomplete")
     if release["draft"]:
         before_mutation()
-        client.request("PATCH", API_ROOT + f"/releases/{release['id']}", {"draft": False})
+        response = client.request("PATCH", API_ROOT + f"/releases/{release_id}", {"draft": False})
+        _release_metadata(response, notes, release_id)
         published = True
-    release, present = _release_state(client, notes, blobs)
+        release, present = _confirm_release(client, notes, blobs, release_id, "published", sleep)
+    else:
+        release, present = _release_state(client, notes, blobs, release_id)
     require(release is not None and release["draft"] is False and present == set(blobs), "Final release state is unverified")
     recheck()
     return {"result": "PASS", "created_draft": created, "uploaded": uploaded, "published_draft": published,

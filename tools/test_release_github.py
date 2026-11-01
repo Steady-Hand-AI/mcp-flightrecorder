@@ -340,9 +340,10 @@ class PromotionArtifactTests(unittest.TestCase):
 
 
 class ReleaseClient:
-    def __init__(self, notes, blobs, *, draft=None, present=()):
+    def __init__(self, notes, blobs, *, draft=None, present=(), release_id=40):
+        self.release_id = release_id
         self.release = None if draft is None else {
-            "id": 40, "tag_name": github.TAG, "name": f"MCP Flight Recorder {github.VERSION}",
+            "id": release_id, "tag_name": github.TAG, "name": f"MCP Flight Recorder {github.VERSION}",
             "prerelease": False, "draft": draft, "body": notes,
         }
         self.assets = {name: {"id": index, "name": name, "state": "uploaded", "size": len(blobs[name]),
@@ -350,10 +351,15 @@ class ReleaseClient:
                        for index, name in enumerate(present, start=50)}
         self.events = []
 
+    def get_json(self, path, *, allow_404=False):
+        if path == github.API_ROOT + f"/releases/{self.release_id}":
+            return deepcopy(self.release)
+        raise ReleaseError("Unexpected synthetic direct request")
+
     def pages(self, path, key=None):
         if path == github.API_ROOT + "/releases":
             return [] if self.release is None else [deepcopy(self.release)]
-        if path == github.API_ROOT + "/releases/40/assets":
+        if path == github.API_ROOT + f"/releases/{self.release_id}/assets":
             return [dict(asset) for asset in self.assets.values()]
         raise ReleaseError("Unexpected synthetic request")
 
@@ -363,18 +369,65 @@ class ReleaseClient:
     def request(self, method, path, payload):
         self.events.append(method)
         if method == "POST" and path == github.API_ROOT + "/releases":
-            self.release = {"id": 40, **deepcopy(payload)}
-        elif method == "PATCH" and path == github.API_ROOT + "/releases/40":
+            self.release = {"id": self.release_id, **deepcopy(payload)}
+        elif method == "PATCH" and path == github.API_ROOT + f"/releases/{self.release_id}":
             self.release.update(payload)
         else:
             raise ReleaseError("Unexpected synthetic mutation")
+        return deepcopy(self.release)
 
     def upload_asset(self, release_id, name, blob):
+        if release_id != self.release_id:
+            raise ReleaseError("Upload targets a different release")
         self.events.append("UPLOAD:" + name)
         if name in self.assets:
             raise ReleaseError("Upload would overwrite")
         self.assets[name] = {"id": 50 + len(self.assets), "name": name, "state": "uploaded",
                              "size": len(blob), "bytes": blob}
+        return {key: value for key, value in self.assets[name].items() if key != "bytes"}
+
+
+class DelayedReleaseClient(ReleaseClient):
+    """Successful mutations persist once; independent reads can lag behind them."""
+
+    def __init__(self, *args, create_delay=0, asset_delay=0, publish_delay=0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.delays = {"create": create_delay, "assets": asset_delay, "publish": publish_delay}
+        self.observations = {phase: 0 for phase in self.delays}
+        self.release_reads = []
+
+    def lagging(self, phase):
+        self.observations[phase] += 1
+        if self.delays[phase]:
+            self.delays[phase] -= 1
+            return True
+        return False
+
+    def observed_release(self):
+        release = deepcopy(self.release)
+        if "PATCH" in self.events:
+            if self.lagging("publish"):
+                release["draft"] = True
+        elif "POST" in self.events and not self.assets and self.lagging("create"):
+            return None
+        return release
+
+    def get_json(self, path, *, allow_404=False):
+        self.release_reads.append(path)
+        if path == github.API_ROOT + f"/releases/{self.release_id}":
+            return self.observed_release()
+        return super().get_json(path, allow_404=allow_404)
+
+    def pages(self, path, key=None):
+        if path == github.API_ROOT + "/releases":
+            self.release_reads.append(path)
+            release = self.observed_release()
+            return [] if release is None else [release]
+        rows = super().pages(path, key)
+        if path.endswith("/assets") and any(event.startswith("UPLOAD:") for event in self.events):
+            if self.lagging("assets"):
+                return rows[:-1]
+        return rows
 
 
 class ReleaseTests(unittest.TestCase):
@@ -390,6 +443,7 @@ class ReleaseTests(unittest.TestCase):
         self.manifest = write_bundle(dist, self.bundle, identity(), {"python": "3.12.13"})
         self.blobs = {path.name: path.read_bytes() for path in self.bundle.iterdir()}
         self.notes = "Release notes.\n"
+        self.waits = []
         self.env = patch.dict(os.environ, {"RELEASE_MODE": "staged-release"})
         self.env.start()
         self.addCleanup(self.env.stop)
@@ -397,7 +451,8 @@ class ReleaseTests(unittest.TestCase):
     def finalize(self, client, recheck=None):
         def identity_check():
             client.events.append("RECHECK")
-        return github.finalize_release(self.bundle, self.manifest, self.notes, recheck or identity_check, client)
+        return github.finalize_release(self.bundle, self.manifest, self.notes, recheck or identity_check, client,
+                                       sleep=self.waits.append)
 
     def assert_guarded_mutations(self, events):
         for index, event in enumerate(events):
@@ -414,6 +469,208 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(client.events[-2:], ["PATCH", "RECHECK"])
         self.assertFalse(client.release["draft"])
         self.assert_guarded_mutations(client.events)
+
+    def test_delayed_creation_confirms_returned_id_without_repeating_post(self):
+        client = DelayedReleaseClient(self.notes, self.blobs, create_delay=2, release_id=73)
+        result = self.finalize(client)
+        self.assertEqual(result["result"], "PASS")
+        self.assertEqual(client.events.count("POST"), 1)
+        self.assertEqual(client.release_reads.count(github.API_ROOT + "/releases"), 1)
+        self.assertEqual(set(client.release_reads[1:]), {github.API_ROOT + "/releases/73"})
+        self.assertEqual(result["release_id"], 73)
+        self.assertEqual(client.observations["create"], 3)
+        self.assertEqual(self.waits, [2, 2])
+
+    def test_delayed_asset_inventory_never_repeats_uploads(self):
+        client = DelayedReleaseClient(self.notes, self.blobs, draft=True, asset_delay=2)
+        result = self.finalize(client)
+        self.assertEqual(result["result"], "PASS")
+        for name in self.blobs:
+            self.assertEqual(client.events.count("UPLOAD:" + name), 1)
+        self.assertEqual(client.events.count("PATCH"), 1)
+        self.assertEqual(self.waits, [2, 2])
+
+    def test_stale_draft_after_publish_never_repeats_patch(self):
+        client = DelayedReleaseClient(self.notes, self.blobs, draft=True, present=self.blobs, publish_delay=2)
+        result = self.finalize(client)
+        self.assertEqual(result["result"], "PASS")
+        self.assertEqual(client.events.count("PATCH"), 1)
+        self.assertEqual(client.observations["publish"], 3)
+        self.assertEqual(client.events[-1], "RECHECK")
+        self.assertEqual(self.waits, [2, 2])
+
+    def test_each_confirmation_phase_exhausts_after_six_reads_without_repeating_mutations(self):
+        for phase in ("create", "assets", "publish"):
+            with self.subTest(phase=phase):
+                self.waits.clear()
+                delay_name = {"create": "create_delay", "assets": "asset_delay", "publish": "publish_delay"}[phase]
+                client = DelayedReleaseClient(
+                    self.notes, self.blobs, draft=None if phase == "create" else True,
+                    present=self.blobs if phase == "publish" else (),
+                    **{delay_name: 6})
+                with self.assertRaisesRegex(ReleaseError, "confirmation exhausted"):
+                    self.finalize(client)
+                self.assertEqual(client.observations[phase], 6)
+                self.assertEqual(self.waits, [2] * 5)
+                self.assertEqual(client.events.count("POST"), int(phase == "create"))
+                self.assertEqual(client.events.count("PATCH"), int(phase == "publish"))
+                for name in self.blobs:
+                    self.assertEqual(client.events.count("UPLOAD:" + name), int(phase == "assets"))
+
+    def test_three_confirmation_phases_schedule_at_most_thirty_seconds(self):
+        client = DelayedReleaseClient(self.notes, self.blobs, create_delay=5, asset_delay=5, publish_delay=5)
+        self.assertEqual(self.finalize(client)["result"], "PASS")
+        self.assertEqual(self.waits, [2] * 15)
+        self.assertEqual(sum(self.waits), 30)
+        self.assertEqual(client.events.count("POST"), 1)
+        self.assertEqual(client.events.count("PATCH"), 1)
+        for name in self.blobs:
+            self.assertEqual(client.events.count("UPLOAD:" + name), 1)
+        self.assert_guarded_mutations(client.events)
+
+    def test_direct_confirmation_identity_metadata_and_api_conflicts_fail_without_wait(self):
+        faults = [("id", 41), ("id", True), ("id", 0), ("tag_name", "other"), ("draft", 1),
+                  ("prerelease", 0), ("name", "other"), ("body", "other"), ("malformed", []),
+                  ("403", ReleaseError("GitHub request failed with HTTP 403")),
+                  ("500", ReleaseError("GitHub request failed with HTTP 500"))]
+        for phase in ("create", "assets", "publish"):
+            for field, value in faults:
+                with self.subTest(phase=phase, field=field, value=value):
+                    self.waits.clear()
+                    client = ReleaseClient(self.notes, self.blobs, draft=None if phase == "create" else True,
+                                           present=self.blobs if phase == "publish" else ())
+                    original = client.get_json
+                    def conflicting(path, *, allow_404=False):
+                        row = original(path, allow_404=allow_404)
+                        if phase == "publish" and "PATCH" not in client.events:
+                            return row
+                        if isinstance(value, Exception):
+                            raise value
+                        if field == "malformed":
+                            return value
+                        row[field] = value
+                        return row
+                    with patch.object(client, "get_json", side_effect=conflicting) as read:
+                        with self.assertRaises(ReleaseError):
+                            self.finalize(client)
+                    self.assertEqual(read.call_count, 2 if phase == "publish" else 1)
+                    self.assertEqual(self.waits, [])
+                    self.assertEqual(client.events.count("POST"), int(phase == "create"))
+                    self.assertEqual(client.events.count("PATCH"), int(phase == "publish"))
+
+    def test_mutation_response_identity_is_validated_before_confirmation(self):
+        for phase in ("create", "publish"):
+            faults = [("id", True), ("id", 0), ("tag_name", "other"), ("draft", 1),
+                      ("prerelease", True), ("name", "other"), ("body", "other"), ("malformed", None)]
+            if phase == "publish":
+                faults.append(("id", 41))
+            for field, value in faults:
+                with self.subTest(phase=phase, field=field, value=value):
+                    self.waits.clear()
+                    client = ReleaseClient(self.notes, self.blobs, draft=None if phase == "create" else True,
+                                           present=() if phase == "create" else self.blobs)
+                    request = client.request
+                    def response(method, path, payload):
+                        row = request(method, path, payload)
+                        if field == "malformed":
+                            return value
+                        row[field] = value
+                        return row
+                    with patch.object(client, "request", side_effect=response):
+                        with self.assertRaises(ReleaseError):
+                            self.finalize(client)
+                    self.assertEqual(self.waits, [])
+                    self.assertEqual(client.events.count("POST"), int(phase == "create"))
+                    self.assertEqual(client.events.count("PATCH"), int(phase == "publish"))
+
+    def test_conflicting_asset_observation_is_never_a_retryable_partial_inventory(self):
+        for fault in ("extra", "duplicate", "starter", "size", "bytes", "malformed"):
+            with self.subTest(fault=fault):
+                self.waits.clear()
+                client = ReleaseClient(self.notes, self.blobs, draft=True)
+                pages = client.pages
+                def conflicting(path, key=None):
+                    rows = pages(path, key)
+                    if not path.endswith("/assets") or not client.assets:
+                        return rows
+                    if fault == "malformed":
+                        return None
+                    if fault == "extra":
+                        rows.append({"name": "extra.txt", "state": "uploaded"})
+                    elif fault == "duplicate":
+                        rows.append(dict(rows[0]))
+                    elif fault == "starter":
+                        rows[0]["state"] = "starter"
+                    elif fault == "size":
+                        rows[0]["size"] += 1
+                    elif fault == "bytes":
+                        client.assets[rows[0]["name"]]["bytes"] = b"wrong bytes"
+                    return rows
+                with patch.object(client, "pages", side_effect=conflicting):
+                    with self.assertRaises(ReleaseError):
+                        self.finalize(client)
+                self.assertEqual(self.waits, [])
+                self.assertNotIn("PATCH", client.events)
+                for name in self.blobs:
+                    self.assertEqual(client.events.count("UPLOAD:" + name), 1)
+
+    def test_malformed_upload_acknowledgment_stops_before_any_following_mutation(self):
+        for fault in ("null", "scalar", "list", "id", "name", "state", "size", "boolean_size"):
+            with self.subTest(fault=fault):
+                self.waits.clear()
+                client = ReleaseClient(self.notes, self.blobs, draft=True)
+                upload = client.upload_asset
+                def malformed_upload(release_id, name, blob):
+                    acknowledgment = upload(release_id, name, blob)
+                    if fault in {"null", "scalar", "list"}:
+                        acknowledgment = {"null": None, "scalar": 1, "list": []}[fault]
+                    else:
+                        field = "size" if fault == "boolean_size" else fault
+                        acknowledgment[field] = {"id": True, "name": "other", "state": "starter",
+                                                  "size": len(blob) + 1, "boolean_size": True}[fault]
+                    class Opener:
+                        def open(self, request, timeout):
+                            return Response(json.dumps(acknowledgment).encode())
+                    transport = github.GitHubClient(token="synthetic-credential", opener=Opener())
+                    return transport.upload_asset(release_id, name, blob)
+                with patch.object(client, "upload_asset", side_effect=malformed_upload):
+                    with self.assertRaises(ReleaseError):
+                        self.finalize(client)
+                self.assertEqual(self.waits, [])
+                self.assertEqual([event for event in client.events if event != "RECHECK"],
+                                 ["UPLOAD:" + sorted(self.blobs)[0]])
+
+    def test_absence_without_a_successful_mutation_does_not_start_polling(self):
+        client = ReleaseClient(self.notes, self.blobs, draft=False, present=self.blobs)
+        with patch.object(client, "get_json", return_value=None) as read:
+            with self.assertRaisesRegex(ReleaseError, "incomplete"):
+                self.finalize(client)
+        self.assertEqual(read.call_count, 1)
+        self.assertEqual(self.waits, [])
+        self.assertEqual(client.events, ["RECHECK"])
+
+    def test_bundle_change_during_confirmation_prevents_the_next_mutation(self):
+        client = DelayedReleaseClient(self.notes, self.blobs, create_delay=1)
+        def changed_bundle(delay):
+            (self.bundle / WHEEL).write_bytes(b"changed while awaiting confirmation")
+        with self.assertRaises(ReleaseError):
+            github.finalize_release(self.bundle, self.manifest, self.notes, lambda: None, client,
+                                    sleep=changed_bundle)
+        self.assertEqual(client.events, ["POST"])
+
+    def test_identity_change_during_publish_confirmation_cannot_return_success(self):
+        client = DelayedReleaseClient(self.notes, self.blobs, draft=True, present=self.blobs, publish_delay=1)
+        changed = False
+        def drift(delay):
+            nonlocal changed
+            changed = True
+        def recheck():
+            if changed:
+                raise ReleaseError("Identity changed during publication confirmation")
+        with self.assertRaisesRegex(ReleaseError, "changed during publication confirmation"):
+            github.finalize_release(self.bundle, self.manifest, self.notes, recheck, client, sleep=drift)
+        self.assertFalse(client.release["draft"])
+        self.assertEqual(client.events, ["PATCH"])
 
     def test_complete_published_is_idempotent_without_mutation(self):
         client = ReleaseClient(self.notes.removesuffix("\n"), self.blobs, draft=False, present=self.blobs)
@@ -568,7 +825,7 @@ class TransportTests(unittest.TestCase):
         self.assertNotIn("Authorization", opener.requests[1].headers)
 
     def test_unsafe_redirect_oversize_and_non404_are_not_absence(self):
-        for fault in ("redirect", "oversize", "403", "429", "500", "invalid-json", "duplicate-json"):
+        for fault in ("redirect", "oversize", "403", "429", "500", "invalid-json", "duplicate-json", "null-json"):
             with self.subTest(fault=fault):
                 class Opener:
                     def open(self, request, timeout):
@@ -578,6 +835,8 @@ class TransportTests(unittest.TestCase):
                             raise HTTPError(request.full_url, int(fault), "failure", {}, None)
                         if fault == "duplicate-json":
                             return Response(b'{"id": 1, "id": 2}')
+                        if fault == "null-json":
+                            return Response(b"null")
                         return Response(b"oversized" if fault == "oversize" else b"not-json")
                 client = github.GitHubClient(token="synthetic-credential", opener=Opener())
                 with self.assertRaises(ReleaseError) as caught:

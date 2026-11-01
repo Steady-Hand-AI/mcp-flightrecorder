@@ -1,0 +1,5 @@
+build==1.6.1
+setuptools==84.2.1
+packaging==26.3
+twine==7.0.0
+PyYAML==6.0.3

@@ -247,6 +247,24 @@ A committed tree is exported into a pristine directory and checked against `tool
 
 The read-only GitHub Actions workflow runs the 19-module SDK-free selection on Linux CPython 3.11 and 3.14, plus the separate ten-module main integration selection on CPython 3.14. Each suite has its own environment and four workers. The core 3.11 job also rebuilds and installs the sdist. These are configured checks, not a claim of observed hosted success; the workflow does not publish artifacts or packages. [Testing](testing.md#4-source-package-hygiene) documents the commands and limits.
 
+### Staged publication
+
+The manual `publish.yml` workflow admits main-only `validate-only` or explicit `staged-release` dispatch with a full reviewed commit, version 0.5.16 and planned tag 0.5.16. Staged release additionally requires that bare tag to exist as an annotated tag at the approved commit. A clean source export builds one original wheel/sdist pair, with package guards, strict Twine, installed smoke and an sdist-rebuilt wheel comparison. Both modes store a flat candidate containing the pair, `manifest.json` and `SHA256SUMS`; source/workflow identity, exact main-push CI and artifact hashes remain bound to the run.
+
+Validate-only ends after candidate storage. Staged publication promotes the same bytes through the `testpypi`, `pypi` and `github-release` environments. A release reviewer inspects this run's candidate before TestPyPI approval; PyPI follows TestPyPI download/install verification and a second environment approval. GitHub draft/published-state verification follows PyPI download/install verification. Identity is rechecked after waits. Only proven identical existing files permit partial resume; conflicts stop without deleting, replacing or retagging public state. These are configured release paths, not an observed publication claim. [Releasing](releasing.md) contains exact setup and operator steps.
+
+```mermaid
+flowchart TD
+    Identity["Main dispatch: exact commit / version / tag"] --> Build["Clean export: build + inspect one pair"]
+    Build --> Candidate["Same-run candidate: wheel + sdist + manifest + checksums"]
+    Candidate -->|validate-only| Stop["Stop after candidate storage"]
+    Candidate -->|staged-release: exact CI + annotated tag| Test["TestPyPI approval: inspect this run's bytes"]
+    Test --> TestVerify["Upload missing only; verify download + install"]
+    TestVerify --> PyPI["PyPI approval: preserve same pair"]
+    PyPI --> PyVerify["Upload missing only; verify download + install"]
+    PyVerify --> GitHub["Verify draft + four assets; publish; verify final state"]
+```
+
 ## 10. Integration boundaries
 
 Model facades bind the selected native signature at invocation; MCP facades expose fixed method signatures. Each invocation claims a fresh `ModelEvidence` or `OperationEvidence` and fixes scope before returning deferred work. Native MCP argument validation still occurs when the native method executes. Wrong/reused evidence is a caller error before native execution. These objects hold receipts and bounded losses rather than duplicate payloads. Projection and policy happen at execution; never-awaited work creates no observation, native call or reservation. [M04](#m04--model-observations-and-host-consumed-streams) and [M05](#m05--mcp-observation-without-invented-attribution) display the two lifecycles.

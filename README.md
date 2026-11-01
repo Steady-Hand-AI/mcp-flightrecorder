@@ -10,7 +10,7 @@ An accepted capture receipt means the observation entered the queue. It does not
 
 ## Install from source
 
-Select an available supported GIL-enabled CPython once and use the resulting environment for the commands below. Set `MFR_PYTHON` to choose an interpreter; otherwise the recipe uses `python3`. The preflight prints the actual Python and SQLite versions. [Testing](docs/testing.md) distinguishes contributor setup from completed qualification.
+Select an available supported GIL-enabled CPython once and use the resulting environment for the commands below. Set `MFR_PYTHON` to choose an interpreter; otherwise the recipe uses `python3`. The preflight prints the actual Python and SQLite versions. [Testing](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/testing.md) distinguishes contributor setup from completed qualification.
 
 ```sh
 git clone https://github.com/Steady-Hand-AI/mcp-flightrecorder.git
@@ -39,7 +39,7 @@ Install an optional SDK adapter only when needed:
 "$mfr_env/bin/python" -m pip install '.[anyllm-ollama]'
 ```
 
-The MCP 1.23.1 session adapter uses the separate `mcp-session-legacy` extra and a separate environment. Adapter signatures, version constraints and host attachment examples are in [Integrations](docs/integrations.md).
+The MCP 1.23.1 session adapter uses the separate `mcp-session-legacy` extra and a separate environment. Adapter signatures, version constraints and host attachment examples are in [Integrations](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/integrations.md).
 
 ## Try a recording without a service
 
@@ -54,7 +54,7 @@ recording_dir=$(mktemp -d)
 
 `quickstart.py` uses only the installed public API and creates one host observation without network access. It prints the new recording path. `fr check` may report `unknown` for this deliberately partial observation; that is not a failed recording. The recorder never overwrites or resumes an existing file. Longer deterministic scenarios used for regression testing live under `tests/producers/`, not `examples/`.
 
-The installed `fr` command and `python -m mcp_flightrecorder` share one JSON interface. Use `fr explain`, `fr slice`, `fr payload` and `fr sql` to inspect a recording. `fr snapshot SOURCE OUT` creates a portable copy without changing the source. The five scoped reader commands (`check`, `turns`, `explain`, `payload`, `slice`) accept `--timeout` up to 30 seconds, default 10. With inferred `--run`, selection and operation are separate reads, each using that budget. The [inspection contract](docs/inspection.md) describes arguments, private snapshot-cache limits, output fields and exit codes.
+The installed `fr` command and `python -m mcp_flightrecorder` share one JSON interface. Use `fr explain`, `fr slice`, `fr payload` and `fr sql` to inspect a recording. `fr snapshot SOURCE OUT` creates a portable copy without changing the source. The five scoped reader commands (`check`, `turns`, `explain`, `payload`, `slice`) accept `--timeout` up to 30 seconds, default 10. With inferred `--run`, selection and operation are separate reads, each using that budget. The [inspection contract](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/inspection.md) describes arguments, private snapshot-cache limits, output fields and exit codes.
 
 ## Use the capture API
 
@@ -83,7 +83,7 @@ finally:
 
 Check capture receipts and `recorder.health()` when recording completeness matters. `close_result.portable` reports whether the stopped recording was finalized and verified as a standalone file. A portable recording can still contain incomplete capture. Use `capture="metadata"` when bodies should be omitted; metadata, structural membership and retention facts remain available.
 
-See [Capture](docs/capture.md) for the complete public contract and [Architecture](docs/architecture.md) for admission, transaction, identity and shutdown rules.
+See [Capture](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/capture.md) for the complete public contract and [Architecture](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/architecture.md) for admission, transaction, identity and shutdown rules.
 
 ## Operational logging
 
@@ -101,27 +101,31 @@ logging.getLogger("mcp_flightrecorder").setLevel(logging.INFO)
 
 `INFO` reports startup, clean portable closure and verified snapshots. `WARNING` reports capture loss, incomplete closure, busy/timeout finalization and operational inspection failures. `ERROR` reports unexpected capture/writer failure, lost admitted prerequisites and failed snapshot cleanup. Repeated capture reasons are bounded; captured content, paths, SQL and raw exceptions are excluded.
 
-The library installs only a `NullHandler`, so it stays silent until the application configures logging. It creates no log files and does not configure the root logger. Receipts, health and inspection JSON remain the authoritative results. See [logging behavior](docs/capture.md#6-operational-logging) for component names, limits and handler ownership.
+The library installs only a `NullHandler`, so it stays silent until the application configures logging. It creates no log files and does not configure the root logger. Receipts, health and inspection JSON remain the authoritative results. See [logging behavior](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/capture.md#6-operational-logging) for component names, limits and handler ownership.
 
 ## Develop and test
 
 Local recipes accept a supported **GIL-enabled CPython 3.11+**. Record the actual Python, SQLite and dependency versions with each test run; the declared `>=3.11` metadata floor does not establish that every interpreter has been tested.
 
-Follow the complete [Testing](docs/testing.md) recipe to select one interpreter, export a committed source tree, build in a disposable copy and install the wheel into fresh environments. It provides the **19-module SDK-free** selection and a separate **10-module integration** selection: four adapter/fixture modules plus six SDK-backed inspection modules. `pytest tests` includes both selections. Optional native host profiles use their own separate environments and direct requirements; legacy MCP 1.x must not share the modern MCP 2.x environment. A missing optional SDK is not a failed core test or a passed compatibility test. Tests construct recordings in temporary directories and check the examples with ordinary pytest assertions and independent SQL. The source distribution includes the seven declarative JSON inputs needed by the controlled integration scenario.
+Follow the complete [Testing](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/testing.md) recipe to select one interpreter, export a committed source tree, build in a disposable copy and install the wheel into fresh environments. It provides the **19-module SDK-free** selection and a separate **10-module integration** selection: four adapter/fixture modules plus six SDK-backed inspection modules. `pytest tests` includes both selections. Optional native host profiles use their own separate environments and direct requirements; legacy MCP 1.x must not share the modern MCP 2.x environment. A missing optional SDK is not a failed core test or a passed compatibility test. Tests construct recordings in temporary directories and check the examples with ordinary pytest assertions and independent SQL. The source distribution includes the seven declarative JSON inputs needed by the controlled integration scenario.
 
 The [CI workflow](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/.github/workflows/ci.yml) is configured for Linux core jobs on CPython 3.11 and 3.14 and a separate CPython 3.14 integration job. It checks the exported source and built distributions against an explicit public inventory, rebuilds from the sdist, and exercises installed artifacts. The workflow uses read-only repository permissions; it does not publish packages. Check the actual [Actions runs](https://github.com/Steady-Hand-AI/mcp-flightrecorder/actions) for observed results. Configuration alone does not establish a passing run.
+
+The manual [release workflow](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/releasing.md) provides validation and staged publication through TestPyPI, PyPI and GitHub. It promotes one reviewed wheel/sdist pair, verifies downloaded bytes and installations between stages, and uses separate registry approval gates. See [release notes](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/release-notes.md) for version 0.5.16; source installation remains the guide above until registry publication is verified.
 
 ## Documentation and source
 
 | Resource | Purpose |
 |---|---|
-| [Architecture](docs/architecture.md) / [HTML map](docs/architecture.html) | Current modules, data flow and invariants |
-| [Detailed control flows](docs/architecture.md#detailed-control-flows) | Component ownership, admission, persistence and failure-path diagrams |
-| [Capture API](docs/capture.md) | Recorder construction, scopes, observations, lifecycle and shutdown |
-| [Inspection API and CLI](docs/inspection.md) | Read-only queries, explanation, ancestry, integrity and snapshots |
-| [Integrations](docs/integrations.md) | SDK facades, evidence receipts and host attachment recipes |
-| [Testing](docs/testing.md) | Reproducible local suites and temporary fixtures |
-| [Changelog](CHANGELOG.md) | Version history and unreleased changes |
+| [Architecture](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/architecture.md) / [HTML map](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/architecture.html) | Current modules, data flow and invariants |
+| [Detailed control flows](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/architecture.md#detailed-control-flows) | Component ownership, admission, persistence and failure-path diagrams |
+| [Capture API](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/capture.md) | Recorder construction, scopes, observations, lifecycle and shutdown |
+| [Inspection API and CLI](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/inspection.md) | Read-only queries, explanation, ancestry, integrity and snapshots |
+| [Integrations](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/integrations.md) | SDK facades, evidence receipts and host attachment recipes |
+| [Testing](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/testing.md) | Reproducible local suites and temporary fixtures |
+| [Releasing](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/releasing.md) | Candidate validation, registry setup and staged publication |
+| [Release notes](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/release-notes.md) | Curated version 0.5.16 notes |
+| [Changelog](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/CHANGELOG.md) | Version history and unreleased changes |
 | [Repository](https://github.com/Steady-Hand-AI/mcp-flightrecorder) | Source code |
 | [Issues](https://github.com/Steady-Hand-AI/mcp-flightrecorder/issues) | Bug reports and feature requests |
 
@@ -131,4 +135,4 @@ Runtime code is under `src/mcp_flightrecorder/`; `sql/schema.sql` is the canonic
 
 Copyright 2026 Volodymyr Barylyak.
 
-MCP Flight Recorder is licensed under the Apache License, Version 2.0 (`Apache-2.0`). See [LICENSE](LICENSE) for the complete terms and [NOTICE](NOTICE) for project attribution.
+MCP Flight Recorder is licensed under the Apache License, Version 2.0 (`Apache-2.0`). See [LICENSE](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/LICENSE) for the complete terms and [NOTICE](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/NOTICE) for project attribution.

@@ -194,6 +194,8 @@ The helper exports committed `HEAD` and leaves its temporary work directory for 
 The workflow contains no deployment or upload step. Optional compatibility profiles in §2 are separate from this selected CI matrix. Consult actual Actions runs for observed Linux outcomes; configured jobs and local checks are not evidence of a hosted pass. Version control retains project history; source packages contain the current implementation and public documentation.
 
 
+Release preparation uses a separate manual workflow. Its focused checks cover exact source/CI identity, the four-file candidate bundle, strict Twine validation, original/rebuilt wheel parity, registry conflict and resume decisions, fresh downloaded-wheel installation and downstream ordering. Service responses are synthetic in local tests; no registry publication is implied. The [release guide](releasing.md) documents setup, operator commands and live-stage verification.
+
 ## 5. Operational logging regressions
 
 The main suite exercises standard logging through actual Recorder, adapter, reader and CLI behavior. `test_logging.py` covers default silence/root-configuration ownership, concurrent bounded capacity warnings, content omission versus metadata policy, and failed application handlers. Existing writer/finalization cases also verify incomplete-closure warnings and that public portability is not logged before the retry owner exits. OpenAI adapter cases preserve exact native returns, exceptions, cancellation and consumed chunks with capture/logging failures. `test_inspection_logging.py` covers safe fields, deadline precedence, released connections, final snapshot cleanup outcomes and producer-to-reader comparison reasons.

@@ -6,6 +6,7 @@ recursive-include compatibility_tests *.py
 recursive-include examples *.py
 recursive-include requirements *.txt
 recursive-include docs *.md *.html
+recursive-include tools *.py *.sh *.txt
 
 # Local/private material must not enter source distributions.
 prune .git

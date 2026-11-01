@@ -160,21 +160,39 @@ class ReleaseRegistryTests(unittest.TestCase):
         download_calls = [url for url, _ in self.fixture.calls if url != self.fixture.endpoint]
         self.assertEqual(len(download_calls), 3)
 
-    def test_propagation_exhaustion_and_conflict_do_not_create_success_directory(self):
+    def test_default_propagation_budget_allows_six_absent_observations_then_complete(self):
+        self.fixture.states = [(404, b"")] * 6 + [(200, self.fixture.response(self.fixture.rows))]
+        sleeps = []
+        destination = registry.registry_verify(self.bundle, "testpypi", self.work / "verified", self.digest,
+                                               transport=self.fixture, sleep=sleeps.append)
+        self.assertEqual(sleeps, [15] * 6)
+        self.assertEqual(sum(url == self.fixture.endpoint for url, _ in self.fixture.calls), 7)
+        self.assertEqual({p.name for p in destination.iterdir()}, artifacts.PAIR)
+        for name in artifacts.PAIR:
+            self.assertEqual((destination / name).read_bytes(), (self.bundle / name).read_bytes())
+
+    def test_default_propagation_exhaustion_has_twelve_observations_and_no_success_directory(self):
         self.fixture.states = [(404, b"")]
+        sleeps = []
         with self.assertRaisesRegex(artifacts.ReleaseError, "propagation incomplete"):
             registry.registry_verify(self.bundle, "testpypi", self.work / "verified", self.digest,
-                                     transport=self.fixture, attempts=2, delay=0, sleep=lambda _: None)
+                                     transport=self.fixture, sleep=sleeps.append)
         self.assertFalse((self.work / "verified").exists())
-        self.assertEqual(len(self.fixture.calls), 2)
+        self.assertEqual(len(self.fixture.calls), 12)
+        self.assertTrue(all(url == self.fixture.endpoint for url, _ in self.fixture.calls))
+        self.assertEqual(sleeps, [15] * 11)
+
+    def test_default_propagation_conflict_stops_immediately_without_sleep_or_success_directory(self):
         rows = copy.deepcopy(self.fixture.rows)
         rows[0]["size"] += 1
         self.fixture.states = [(200, self.fixture.response(rows))]
-        self.fixture.calls.clear()
+        sleeps = []
         with self.assertRaisesRegex(artifacts.ReleaseError, "conflicting"):
             registry.registry_verify(self.bundle, "testpypi", self.work / "verified", self.digest,
-                                     transport=self.fixture, attempts=3, delay=0, sleep=lambda _: self.fail("must not retry conflict"))
+                                     transport=self.fixture, sleep=sleeps.append)
         self.assertEqual(len(self.fixture.calls), 1)
+        self.assertEqual(sleeps, [])
+        self.assertFalse((self.work / "verified").exists())
 
     def test_pypi_performs_its_own_lookup_and_downloads(self):
         fixture = RegistryFixture(self.bundle, self.manifest, "pypi")

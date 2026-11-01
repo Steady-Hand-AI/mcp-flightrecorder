@@ -130,7 +130,7 @@ def registry_plan(bundle: Path, registry: str, upload_dir: Path, expected_digest
 
 
 def registry_verify(bundle: Path, registry: str, destination: Path, expected_digest: str, *,
-                    transport=None, attempts=6, delay=10, sleep=time.sleep) -> Path:
+                    transport=None, attempts=12, delay=15, sleep=time.sleep) -> Path:
     """Poll only absent/correct partial state; conflicts and access errors fail immediately."""
     require(expected_digest is not None, "expected manifest digest is required")
     require(type(attempts) is int and 1 <= attempts <= 12 and type(delay) in (int, float)

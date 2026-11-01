@@ -1,0 +1,256 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Validate a candidate or explicitly promote its reviewed bytes.
+        type: choice
+        required: true
+        default: validate-only
+        options: [validate-only, staged-release]
+      release_version:
+        description: Canonical package version.
+        type: string
+        required: true
+        default: '0.5.16'
+      expected_commit:
+        description: Full reviewed main commit SHA (40 lowercase hex characters).
+        type: string
+        required: true
+      planned_tag:
+        description: Bare annotated tag, already pointing at the commit for staged release.
+        type: string
+        required: true
+        default: '0.5.16'
+
+permissions:
+  contents: read
+  actions: read
+  checks: read
+
+concurrency:
+  group: publish-${{ inputs.release_version }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: source
+
+env:
+  RELEASE_MODE: ${{ inputs.mode }}
+  RELEASE_VERSION: ${{ inputs.release_version }}
+  EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+  PLANNED_TAG: ${{ inputs.planned_tag }}
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  build:
+    name: Build and validate one candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      manifest_sha256: ${{ steps.candidate.outputs.manifest_sha256 }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install the declared release toolchain
+        run: python -m pip --isolated install --index-url https://pypi.org/simple -r requirements/release.txt > "$RUNNER_TEMP/release-toolchain.log" 2>&1
+      - name: Verify identity, build, test, compare and smoke-install
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -I -B tools/release.py build --work "$RUNNER_TEMP/release-build"
+      # This exact allowlist is public in both modes; raw reports remain runner-local.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: upload
+        with:
+          name: mcp-flightrecorder-0.5.16-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-build/bundle/
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 7
+
+  testpypi_publish:
+    name: Approve candidate and publish missing TestPyPI files
+    needs: build
+    if: inputs.mode == 'staged-release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: testpypi
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          path: ${{ runner.temp }}/bundle
+          merge-multiple: true
+      - name: Recheck approved identity and verify any existing files
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANIFEST_SHA256: ${{ needs.build.outputs.manifest_sha256 }}
+          RELEASE_ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+          RELEASE_ARTIFACT_DIGEST: ${{ needs.build.outputs.artifact_digest }}
+        run: python -I -B tools/release.py registry-plan --registry testpypi --bundle "$RUNNER_TEMP/bundle" --manifest-sha256 "$MANIFEST_SHA256" --work "$GITHUB_WORKSPACE/registry"
+      - name: Upload only verified missing files using Trusted Publishing
+        if: steps.prepare.outputs.missing_count != '0'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: registry/upload/
+          skip-existing: false
+          verbose: false
+          print-hash: true
+
+  testpypi_verify:
+    name: Verify TestPyPI downloads and installed behavior
+    needs: [build, testpypi_publish]
+    if: inputs.mode == 'staged-release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          path: ${{ runner.temp }}/bundle
+          merge-multiple: true
+      - name: Verify the complete registry pair and install its downloaded wheel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANIFEST_SHA256: ${{ needs.build.outputs.manifest_sha256 }}
+          RELEASE_ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+          RELEASE_ARTIFACT_DIGEST: ${{ needs.build.outputs.artifact_digest }}
+        run: python -I -B tools/release.py registry-verify --registry testpypi --bundle "$RUNNER_TEMP/bundle" --manifest-sha256 "$MANIFEST_SHA256" --work "$RUNNER_TEMP/registry-verify"
+
+  pypi_publish:
+    name: Approve the same candidate and publish missing PyPI files
+    needs: [build, testpypi_verify]
+    if: inputs.mode == 'staged-release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          path: ${{ runner.temp }}/bundle
+          merge-multiple: true
+      - name: Recheck identity after approval and verify existing PyPI bytes
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANIFEST_SHA256: ${{ needs.build.outputs.manifest_sha256 }}
+          RELEASE_ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+          RELEASE_ARTIFACT_DIGEST: ${{ needs.build.outputs.artifact_digest }}
+        run: python -I -B tools/release.py registry-plan --registry pypi --bundle "$RUNNER_TEMP/bundle" --manifest-sha256 "$MANIFEST_SHA256" --work "$GITHUB_WORKSPACE/registry"
+      - name: Upload only verified missing files using Trusted Publishing
+        if: steps.prepare.outputs.missing_count != '0'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: registry/upload/
+          skip-existing: false
+          verbose: false
+          print-hash: true
+
+  pypi_verify:
+    name: Verify PyPI downloads and installed behavior
+    needs: [build, pypi_publish]
+    if: inputs.mode == 'staged-release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          path: ${{ runner.temp }}/bundle
+          merge-multiple: true
+      - name: Independently verify PyPI and install its downloaded wheel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANIFEST_SHA256: ${{ needs.build.outputs.manifest_sha256 }}
+          RELEASE_ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+          RELEASE_ARTIFACT_DIGEST: ${{ needs.build.outputs.artifact_digest }}
+        run: python -I -B tools/release.py registry-verify --registry pypi --bundle "$RUNNER_TEMP/bundle" --manifest-sha256 "$MANIFEST_SHA256" --work "$RUNNER_TEMP/registry-verify"
+
+  github_release:
+    name: Verify and finalize the GitHub Release
+    needs: [build, pypi_verify]
+    if: inputs.mode == 'staged-release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: github-release
+    permissions:
+      contents: write
+      actions: read
+      checks: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          path: ${{ runner.temp }}/bundle
+          merge-multiple: true
+      - name: Reconcile verified assets and publish a complete draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANIFEST_SHA256: ${{ needs.build.outputs.manifest_sha256 }}
+          RELEASE_ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+          RELEASE_ARTIFACT_DIGEST: ${{ needs.build.outputs.artifact_digest }}
+        run: python -I -B tools/release.py github-release --bundle "$RUNNER_TEMP/bundle" --manifest-sha256 "$MANIFEST_SHA256"

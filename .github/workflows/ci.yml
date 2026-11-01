@@ -1,0 +1,31 @@
+name: Installed package
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  installed-wheel:
+    name: ${{ matrix.profile }} / Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: core
+            python: '3.11'
+          - profile: core
+            python: '3.14'
+          - profile: integration
+            python: '3.14'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build, inspect, install and test
+        run: bash tools/ci.sh '${{ matrix.profile }}'

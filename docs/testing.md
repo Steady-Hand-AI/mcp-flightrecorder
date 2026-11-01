@@ -8,9 +8,10 @@ Contributor recipes accept an available supported **GIL-enabled CPython 3.11+**,
 
 A missing interpreter or unresolved dependency leaves dependent coverage unexecuted; a suite that starts and fails, crashes or times out remains failed or incomplete. The recipes below are test procedures, not claims of completed qualification.
 
-Run from a clean checkout. Set `MFR_PYTHON` to select an interpreter, or use the available `python3` default. The disposable build copy keeps metadata and generated files outside the source tree; do not chmod an existing private directory:
+Run from the repository after committing the changes you intend to test. The export below contains exactly `HEAD`; uncommitted and untracked files are excluded. Set `MFR_PYTHON` to select an interpreter, or use the available `python3` default. A separate disposable build copy keeps generated metadata out of the pristine export; do not chmod an existing private directory:
 
 ```sh
+set -eu
 mfr_python=$(command -v "${MFR_PYTHON:-python3}") || exit 1
 "$mfr_python" -I -B - <<'PYTHON'
 import sys, sqlite3
@@ -21,30 +22,44 @@ assert getattr(sys, "_is_gil_enabled", lambda: True)()
 assert not sys.flags.optimize
 print(sys.version, sqlite3.sqlite_version, sys.executable)
 PYTHON
-product_dir=$(pwd -P)
+product_dir=$(git rev-parse --show-toplevel)
 work_dir=$(mktemp -d /tmp/mfr-python-XXXXXX)
 chmod 0711 "$work_dir"  # traversal only on this newly created owned ancestor
 (
     umask 022
-    cp -R "$product_dir" "$work_dir/source"
+    mkdir "$work_dir/source"
+    git -C "$product_dir" archive --format=tar HEAD > "$work_dir/source.tar"
+    tar -xf "$work_dir/source.tar" -C "$work_dir/source"
+    "$mfr_python" -I -B "$work_dir/source/tools/check_package.py" --source "$work_dir/source"
+    cp -R "$work_dir/source" "$work_dir/build-source"
     "$mfr_python" -m venv "$work_dir/build-env"
-    "$work_dir/build-env/bin/python" -I -B -m pip install build setuptools packaging
-    "$work_dir/build-env/bin/python" -I -B -m build --no-isolation --wheel --sdist --outdir "$work_dir/dist" "$work_dir/source"
+    "$work_dir/build-env/bin/python" -I -B -m pip install build 'setuptools>=77.0.3' packaging
+    "$work_dir/build-env/bin/python" -I -B -m build --no-isolation --wheel --sdist --outdir "$work_dir/dist" "$work_dir/build-source"
+    "$mfr_python" -I -B "$work_dir/source/tools/check_package.py" --source "$work_dir/source" \
+        --wheel "$work_dir/dist/mcp_flightrecorder-0.5.16-py3-none-any.whl" \
+        --sdist "$work_dir/dist/mcp_flightrecorder-0.5.16.tar.gz" \
+        --report "$work_dir/package-check.json"
     "$mfr_python" -m venv "$work_dir/core-env"
     "$work_dir/core-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.16-py3-none-any.whl"
-    "$work_dir/core-env/bin/python" -m pip install -r "$product_dir/requirements/test.txt"
+    "$work_dir/core-env/bin/python" -m pip install -r "$work_dir/source/requirements/test.txt"
 )
 "$work_dir/core-env/bin/python" -m pip check
 "$work_dir/core-env/bin/fr" --version
-"$work_dir/core-env/bin/python" -I -c 'import mcp_flightrecorder as m; print(m.__version__, m.__file__)'
+"$work_dir/core-env/bin/python" -I -B - <<'PYTHON'
+from pathlib import Path
+import mcp_flightrecorder as m, sys
+assert Path(m.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+print(m.__version__, m.__file__)
+PYTHON
+cd "$work_dir/source"
 
 ```
 
 Run the following **19-module SDK-free suite** after the build and installation above. Six other inspection modules use the real OpenAI/MCP-backed integration recording fixture and run with the four SDK main modules in the **separate integration environment** in §2. Do not skip them or substitute mocked SDKs.
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir" \
-    "$work_dir/core-env/bin/python" -m pytest -n 4 -p no:cacheprovider \
+env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOLOAD -u PYTEST_ADDOPTS PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir" \
+    "$work_dir/core-env/bin/python" -I -B -m pytest -n 4 -p no:cacheprovider \
     tests/test_admission.py tests/test_async_shutdown.py tests/test_bindings.py \
     tests/test_capture_values.py tests/test_comparisons.py tests/test_contract.py \
     tests/test_core.py tests/test_deferred.py tests/test_duplicate_transition.py \
@@ -58,14 +73,17 @@ Check that `mcp_flightrecorder.__file__` points to the installed venv, never `sr
 
 The new disposable root's mode `0711` and `umask 022` allow the ordinary-user snapshot-media subprocess to traverse the newly created environment. Its chosen Python executable and all ancestors must also be executable by the ordinary user. A root-run permission case must be permitted to drop UID/GID; otherwise its explicit capability skip records a limitation, **not** a passing case. Never loosen the media-directory permissions that the case is testing, chmod an existing private virtualenv, or convert import/snapshot failures into skips. Use the per-command `TMPDIR` so its media fixture lives below a traversable parent.
 
-The SDK-free quickstart can be exercised with the installed CLI and a disposable destination:
+The SDK-free quickstart can be exercised from outside the exported source with the installed CLI and a disposable destination:
 
 ```sh
 recording_dir=$(mktemp -d)
-"$work_dir/core-env/bin/python" -I -B examples/quickstart.py "$recording_dir/quickstart.sqlite"
-"$work_dir/core-env/bin/fr" turns "$recording_dir/quickstart.sqlite"
-"$work_dir/core-env/bin/fr" snapshot "$recording_dir/quickstart.sqlite" "$recording_dir/copy.sqlite"
-"$work_dir/core-env/bin/fr" runs "$recording_dir/copy.sqlite"
+(
+    cd "$recording_dir"
+    "$work_dir/core-env/bin/python" -I -B "$work_dir/source/examples/quickstart.py" "$recording_dir/quickstart.sqlite"
+    "$work_dir/core-env/bin/fr" turns "$recording_dir/quickstart.sqlite"
+    "$work_dir/core-env/bin/fr" snapshot "$recording_dir/quickstart.sqlite" "$recording_dir/copy.sqlite"
+    "$work_dir/core-env/bin/fr" runs "$recording_dir/copy.sqlite"
+)
 ```
 
 Snapshot checks require the copied main database to be independently readable, portable and in SQLite DELETE mode. The source must remain byte-identical. A partial quickstart may have unknown coverage; a portable snapshot does not invent complete observations.
@@ -79,8 +97,8 @@ The **ten-module integration selection** runs in a separate fresh environment cr
 "$work_dir/integration-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.16-py3-none-any.whl"
 "$work_dir/integration-env/bin/python" -m pip install -r requirements/test.txt -r requirements/integration.txt
 "$work_dir/integration-env/bin/python" -m pip check
-PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir" \
-    "$work_dir/integration-env/bin/python" -m pytest -n 4 -p no:cacheprovider \
+env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOLOAD -u PYTEST_ADDOPTS PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir" \
+    "$work_dir/integration-env/bin/python" -I -B -m pytest -n 4 -p no:cacheprovider \
     tests/test_integration_fixture.py tests/test_integration_history.py \
     tests/test_mcp_client.py tests/test_openai_chat.py \
     tests/test_inspection_checks.py tests/test_inspection_commands.py \
@@ -149,9 +167,31 @@ Capture-history tests use public Recorder observations and independent SQLite as
 
 ## 4. Source-package hygiene
 
-The source package contains current code, meaningful tests, the seven declarative JSON inputs, examples, requirements, build configuration and documentation. Generated SQLite recordings/sidecars, run summaries, logs, test reports, coverage output, screenshots, environments, caches, wheels, benchmark data and nested release archives are excluded.
+The source package contains current code, meaningful tests, the seven declarative JSON inputs, examples, requirements, build configuration, package checks and documentation. Generated SQLite recordings/sidecars, run summaries, logs, test reports, coverage output, screenshots, environments, caches, wheels, benchmark data and nested release archives are excluded.
 
-Distribution checks cover source and wheel builds, installed `fr --version`, dependency consistency and local documentation links. A fresh extraction verifies the actual archive inventory. Version control retains project history; source packages contain the current implementation and public documentation.
+[`tools/public_files.txt`](../tools/public_files.txt) is the explicit source inventory. [`tools/check_package.py`](../tools/check_package.py) rejects missing or unexpected source and archive members, unsafe archive paths, private file classes and recognizable credential or personal-path content. It checks wheel/sdist metadata, canonical project links, license/attribution files and the installed schema. Content refusals do not print matched values. This is a bounded package check, not a guarantee that arbitrary sensitive text can be recognized. When adding an intended public file, review the inventory and build manifest together; `.gitignore` does not enforce the package boundary.
+
+The command in §1 checks the pristine export and actual distributions. [`tools/test_package_guard.py`](../tools/test_package_guard.py) exercises valid built artifacts and deliberately invalid cases generated in temporary directories outside source control:
+
+```sh
+MFR_GUARD_SOURCE="$work_dir/source" \
+MFR_GUARD_WHEEL="$work_dir/dist/mcp_flightrecorder-0.5.16-py3-none-any.whl" \
+MFR_GUARD_SDIST="$work_dir/dist/mcp_flightrecorder-0.5.16.tar.gz" \
+    "$mfr_python" -I -B tools/test_package_guard.py
+```
+
+The [GitHub Actions workflow](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/.github/workflows/ci.yml) is configured to run on `push` and `pull_request` with read-only repository permissions. Linux SDK-free jobs use CPython 3.11 and 3.14; a separate CPython 3.14 job installs the declared main integration requirements. All selected pytest suites use four workers with normal assertions. The jobs export the checked-out commit, build wheel and sdist in an external copy, run package checks, install the wheel normally, and verify its import origin. They record Python, SQLite and resolved dependency versions, run `pip check`, and exercise `fr --version`, quickstart, inspection and snapshot from outside the source tree. The core 3.11 job additionally rebuilds a wheel from a fresh sdist extraction and smoke-tests that installation.
+
+To run one complete CI lane locally from the repository, choose a supported interpreter and a disposable work parent outside the checkout:
+
+```sh
+MFR_PYTHON=python3.11 MFR_CI_PARENT=/tmp bash tools/ci.sh core
+MFR_PYTHON=python3.14 MFR_CI_PARENT=/tmp bash tools/ci.sh integration
+```
+
+The helper exports committed `HEAD` and leaves its temporary work directory for inspection. It does not include uncommitted changes. The automated smoke helper asserts installed package origin, schema availability, successful JSON inspection, source preservation and a readable DELETE-mode snapshot.
+
+The workflow contains no deployment or upload step. Optional compatibility profiles in §2 are separate from this selected CI matrix. Consult actual Actions runs for observed Linux outcomes; configured jobs and local checks are not evidence of a hosted pass. Version control retains project history; source packages contain the current implementation and public documentation.
 
 
 ## 5. Operational logging regressions
@@ -164,7 +204,7 @@ These cases collect log records in memory or use temporary subprocess output. Th
 
 Use two profiles with one normally installed wheel: an SDK-free core and a combined MCP/OpenAI/AnyLLM/Ollama environment. The latter uses the integration requirements plus AnyLLM, Ollama and httpx. MCP Client/session checks remain in this selection because they share the retention-policy guard with model adapters. The full main integration suite and separate optional host profiles are documented in §2.
 
-Build from a new disposable copy after source, test or document changes, then install and test that wheel. Keep environments, build copies, JUnit and temporary peer/recording data outside the checkout. Reuse the supported GIL-enabled CPython selected and checked in §1, recording its actual Python and SQLite versions. Only a newly created owned work ancestor gets traversal permission for the existing unprivileged tests; their fixture/database permissions remain unchanged.
+After committing source, test or document changes, export that commit into a new disposable directory, then build, install and test that wheel. Keep environments, build copies, JUnit and temporary peer/recording data outside the checkout. Reuse the supported GIL-enabled CPython selected and checked in §1, recording its actual Python and SQLite versions. Only a newly created owned work ancestor gets traversal permission for the existing unprivileged tests; their fixture/database permissions remain unchanged.
 
 After the fresh external build and core setup in §1, create the one current SDK profile:
 
@@ -179,7 +219,7 @@ mkdir -p "$work_dir/results/tmp"
 "$work_dir/current-env/bin/python" -I -B -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); s.close()'
 ```
 
-The following selection runs nineteen core modules and seven SDK modules from the product directory, sequentially with four workers. It focuses on retention and shared lifecycle behavior; use §2 for the full ten-module main integration suite. Both commands use normal assertions and the installed pytest/xdist/pytest-check plugins' ordinary autoload. Unset `PYTEST_DISABLE_PLUGIN_AUTOLOAD`; do not also load pytest-check under a second plugin name. Clear `PYTEST_ADDOPTS` so inherited selection, plugin or worker options cannot alter the selection.
+The following selection runs nineteen core modules and seven SDK modules from the exported source directory, sequentially with four workers. It focuses on retention and shared lifecycle behavior; use §2 for the full ten-module main integration suite. Both commands use normal assertions and the installed pytest/xdist/pytest-check plugins' ordinary autoload. Unset `PYTEST_DISABLE_PLUGIN_AUTOLOAD`; do not also load pytest-check under a second plugin name. Clear `PYTEST_ADDOPTS` so inherited selection, plugin or worker options cannot alter the selection.
 
 ```sh
 env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOLOAD -u PYTEST_ADDOPTS PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir/results/tmp" \

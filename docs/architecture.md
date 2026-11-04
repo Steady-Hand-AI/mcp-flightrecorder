@@ -1,6 +1,6 @@
 # Architecture
 
-**Package 0.5.16 · SQLite schema 6 · inspection format `mfr.inspect/1` · updated 1 November 2026**
+**Package 0.5.16 · SQLite schema 6 · inspection format `mfr.inspect/1` · updated 4 November 2026**
 
 MCP Flight Recorder captures explicit observations at model, host and MCP boundaries. The host owns native work; the recorder owns bounded capture and its recording. The [HTML map](architecture.html) renders the same implemented behavior offline. [Detailed control flows](#detailed-control-flows) contain nine source-linked views, with closure and snapshot drawn separately. This map covers the responsibilities and material branches of all 31 runtime modules, the schema and build seam; it is not a line-by-line call graph. Public details are in [Capture](capture.md), [Inspection](inspection.md) and [Integrations](integrations.md).
 
@@ -11,9 +11,9 @@ Host observations enter frozen capture preparation through either a thin optiona
 | Layer | Current source | Responsibility |
 |---|---|---|
 | Public capture | [`__init__.py`](../src/mcp_flightrecorder/__init__.py), [`_recorder.py`](../src/mcp_flightrecorder/_recorder.py), [`_types.py`](../src/mcp_flightrecorder/_types.py), [`_config.py`](../src/mcp_flightrecorder/_config.py) | Public imports, scope, receipts, admission, bounded health and shutdown |
-| Capture preparation | [`_capture.py`](../src/mcp_flightrecorder/_capture.py), [`_artifacts.py`](../src/mcp_flightrecorder/_artifacts.py), [`_values.py`](../src/mcp_flightrecorder/_values.py) | Freeze ordinary JSON, prepare envelopes, projections, retention and request manifests |
+| Capture preparation | [`_capture.py`](../src/mcp_flightrecorder/_capture.py), [`_artifacts.py`](../src/mcp_flightrecorder/_artifacts.py), [`_values.py`](../src/mcp_flightrecorder/_values.py) | Normalize optional response usage before freezing facts; prepare ordinary JSON, envelopes, projections, retention and request manifests |
 | Writer and finalization | [`_storage.py`](../src/mcp_flightrecorder/_storage.py) | Capture-time write-connection ownership, FIFO transactions, identities and reservation release; a post-stop finalization retry owns a separate connection |
-| Model adapters | [`openai_chat.py`](../src/mcp_flightrecorder/integrations/openai_chat.py), [`anyllm_ollama.py`](../src/mcp_flightrecorder/integrations/anyllm_ollama.py), [`_model_capture.py`](../src/mcp_flightrecorder/integrations/_model_capture.py), [`_model_stream.py`](../src/mcp_flightrecorder/integrations/_model_stream.py) | SDK translation, shared model/stream lifecycle and optional model body policy |
+| Model adapters | [`openai_chat.py`](../src/mcp_flightrecorder/integrations/openai_chat.py), [`anyllm_ollama.py`](../src/mcp_flightrecorder/integrations/anyllm_ollama.py), [`_model_capture.py`](../src/mcp_flightrecorder/integrations/_model_capture.py), [`_model_stream.py`](../src/mcp_flightrecorder/integrations/_model_stream.py) | SDK translation, shared model/stream lifecycle, opt-in OpenAI usage snapshots and optional model body policy |
 | MCP adapters | [`mcp_client.py`](../src/mcp_flightrecorder/integrations/mcp_client.py), [`mcp_session.py`](../src/mcp_flightrecorder/integrations/mcp_session.py), [`mcp_session_legacy.py`](../src/mcp_flightrecorder/integrations/mcp_session_legacy.py), [`_mcp_capture.py`](../src/mcp_flightrecorder/integrations/_mcp_capture.py), [`_mcp_native.py`](../src/mcp_flightrecorder/integrations/_mcp_native.py) | Version-specific native translation around one shared operation lifecycle and optional MCP body policy |
 | Evidence guards | [`integrations/_common.py`](../src/mcp_flightrecorder/integrations/_common.py), [`integrations/__init__.py`](../src/mcp_flightrecorder/integrations/__init__.py) | SDK-free namespace; label/policy validation, detached JSON copying, single-use evidence claiming and bounded capture failures |
 | Reader | [`inspect.py`](../src/mcp_flightrecorder/inspect.py), [`_inspect_common.py`](../src/mcp_flightrecorder/_inspect_common.py), [`_inspect_records.py`](../src/mcp_flightrecorder/_inspect_records.py), [`_inspect_relations.py`](../src/mcp_flightrecorder/_inspect_relations.py), [`_inspect_checks.py`](../src/mcp_flightrecorder/_inspect_checks.py), [`_inspect_navigation.py`](../src/mcp_flightrecorder/_inspect_navigation.py), [`_inspect_query.py`](../src/mcp_flightrecorder/_inspect_query.py), [`_inspect_slice.py`](../src/mcp_flightrecorder/_inspect_slice.py) | One bounded read transaction and deadline per invocation; shared projections and complete retained-fact counts; static schema metadata needs no connection |
@@ -50,7 +50,7 @@ Exit observes the existing outcome before restoration. An accepted turn attempts
 | `turn(...)` / `dispatch(...)` | Host scope; dispatch action is execute, refuse, local or defer, with explicit source decision-event references. |
 | `observe("model.request", ...)` | New model-call identity; structured manifest or explicitly selected direct request body. |
 | `observe("model.tool_call", ...)` | Separate decision occurrence and event identities; original argument comparison and visible unresolved references. |
-| `observe("model.response", ...)` | Complete, partial, error or cancelled source response. A response is never invented from a missing observation. |
+| `observe("model.response", ...)` | Complete, partial, error or cancelled source response, with optional normalized usage in existing event details. A response is never invented from a missing observation. |
 | `start_operation(...)` / `finish_operation(...)` | `mcp.request`/`mcp.response` plus one operation lifecycle, explicit attribution, and a reserved completion ticket. |
 | `observe("host.tool_result", ...)` | Host-prepared material, explicit source-slot/pointer witnesses and optional ordered text comparison. |
 | `observe("cache.served", ...)` | Positive host/client cache observation, optional cache/client/operation identifiers and finite nonnegative TTL. A repeated body or absent network event is not a cache witness. |
@@ -140,6 +140,8 @@ Reusable message identity requires compatible complete original, binding, projec
 ### Original values versus retained bodies
 
 The public JSON boundary accepts exact built-in dictionaries, lists, strings, integers, finite floats, booleans and null. It detaches containers and rejects cycles, custom objects, non-string keys and nonfinite values. `MISSING` is distinct from JSON null and is allowed only at an exposed top-level absence boundary.
+
+Optional `model.response` usage is normalized before whole-facts freezing. `_capture.py` owns the one private normalizer, also reused by the adapter: only `prompt_tokens`, `cached_tokens` and `cache_write_tokens` survive, each as an exact integer in `0..2**63-1` or null. It shallow-copies ordinary outer facts, reads only selected keys of an ordinary usage dictionary and never traverses discarded extras or invokes custom mapping hooks. Invalid/missing counts become null independently; valid siblings and numerically inconsistent valid reports survive. Non-null non-dictionary usage yields three nulls; direct None or absent usage stays absent. Caller data and strict validation of unrelated facts, payload, state, scope and retention remain unchanged.
 
 Original equality uses a random in-memory per-run HMAC key and the named `args_json_python/1`, `text_blocks_json/1` and `message_json/1` projections. Canonical typing distinguishes booleans, integers and floats; the encoded projection cap is 1 MiB. Disabled, incomplete, unsupported, oversized or unavailable originals yield unavailable tokens with reasons. Raw JSON arguments reject duplicate keys/nonfinite values; disagreement with supplied parsed arguments is `conflicting_arguments`. Ordered text paths define text comparison. Equality establishes neither provenance nor authentication.
 
@@ -271,7 +273,7 @@ Model facades bind the selected native signature at invocation; MCP facades expo
 
 | Facade | Supported seam and projection | Boundary to retain |
 |---|---|---|
-| OpenAI Chat | A bound async Chat Completions method; supplied ordinary JSON and trusted native model/chunk projections. | Does not synthesize SDK defaults or transport options. Unsupported legacy/overriding inputs can make request capture unavailable while native inputs remain unchanged. `AsyncStream` has iteration, context, response and close forwarding. |
+| OpenAI Chat | A bound async Chat Completions method; supplied ordinary JSON and trusted native model/chunk projections; optional detached response usage. | Does not synthesize SDK defaults or transport options. Unsupported legacy/overriding inputs can make request capture unavailable while native inputs remain unchanged. `AsyncStream` has iteration, context, response and close forwarding. |
 | AnyLLM/Ollama | Bound `acompletion`; supplied bound args and allowed provider options; normalized OpenAI response/chunk types. | Excludes timeout/session label from projection; unknown provider options can make it unavailable. Wraps only a closeable async iterator, exposing iteration/`aclose`. Complete stream tool decisions accept `stop` or `tool_calls`. |
 | MCP 2 Client | Public `list_tools` / `call_tool`; list options include cursor, meta and cache mode. | Observes public invocation/result; client, cache, retries and lifecycle remain host-owned. |
 | MCP 2 ClientSession | Public list/call methods with trusted typed pagination projection. | A caller-allowed `InputRequiredResult` remains incomplete rather than a final text-result claim. |
@@ -286,6 +288,14 @@ The stream accumulator has two independent **1,048,576-byte** pools for encoded 
 The host drives every read and cleanup. EOF is complete only with finished choices and no partial-source condition; native error/cancellation and early close retain their own states. Early close forwards native cleanup and records the consumed aggregate as partial, error or cancelled according to the cleanup outcome, without draining. Abandoned streams receive no automatic cleanup. Ordinary terminal observation is guarded once; policy process-control interruption has the limits documented in §6.
 
 Retention is selected separately for each request, decision and response/consumed aggregate. Redacting a decision does not redact its other representation in the response or stream aggregate. Default None or unavailable `MISSING` performs no callback. A configured callback gets detached values; its returned mapping is detached and validated. Ordinary callback/validation failures, including callback-raised cancellation, select fixed omission plus one bounded loss. Other process-control exceptions propagate. Metadata capture overrides body retention. Full supported signatures remain in [Integrations](integrations.md).
+
+### Optional OpenAI response usage
+
+Only the OpenAI factory exposes `record_usage=False`, validated as an exact Boolean at construction and passed to the existing per-invocation `ModelCall` owner. Each enabled call owns one detached dictionary of three scalar counts. Supported native `ChatCompletion` and `ChatCompletionChunk` fields are read with null-safe `model_fields_set` checks at every level, so unset defaults cannot become observed zeros. Normal-response extraction precedes content projection and retention. Ordinary extraction faults are contained locally, with existing process-control boundaries preserved. Missing optional usage adds no loss or partial-content state; keeping counts never requires keeping a body or an SDK object.
+
+For streams, `StreamCapture.consume` checks for usage after the finished-call guard and before body/selection cutoff returns. Explicit empty `choices` plus non-null usage identifies an eligible aggregate. Its entire normalized snapshot replaces the previous snapshot, including nulls. Other chunks do not erase it; arbitrary content-chunk usage is not treated as final. Late host-consumed aggregates remain observable after capture cutoffs without reopening stopped body or tool capture. Nothing sums, merges or maximizes counts, injects provider options, prefetches or drains. The host must request `stream_options={"include_usage": True}`, consume the aggregate and own cleanup; its empty choices make unconditional `chunk.choices[0]` unsafe.
+
+The existing single terminal attempt attaches `usage` to `model.response` facts and releases the snapshot in `finally`. Disabled capture leaves usage absent. Enabled capture without a snapshot attaches all three nulls. Core merges normalized usage into the existing event `details_json`; schema, writer, identities and inspection implementation remain unchanged. Counts survive body replacement, omission, metadata capture and an independent projection failure. They remain potentially sensitive provider reports, not verified bills or cache causes. The [documented `fr sql` recipe](integrations.md#inspect-recorded-usage-with-fr-sql) orders observed response events in a selected finalized run or fixed snapshot, preserves distinct events and unknown fields, and computes a guarded read fraction rather than monetary savings.
 
 ## Detailed control flows
 
@@ -448,7 +458,7 @@ flowchart TD
 
 **Entrypoints:** [`policy_retention`](../src/mcp_flightrecorder/integrations/_common.py), [`_retained_request`](../src/mcp_flightrecorder/_artifacts.py), [`ModelCall.observe`](../src/mcp_flightrecorder/integrations/_model_capture.py), [`openai_chat.wrap_model`](../src/mcp_flightrecorder/integrations/openai_chat.py), [`anyllm_ollama.wrap_model`](../src/mcp_flightrecorder/integrations/anyllm_ollama.py), [`ModelCall.request`](../src/mcp_flightrecorder/integrations/_model_capture.py), [`ModelCall.decision`](../src/mcp_flightrecorder/integrations/_model_capture.py), [`ModelCall.terminal`](../src/mcp_flightrecorder/integrations/_model_capture.py), [`StreamCapture.consume`](../src/mcp_flightrecorder/integrations/_model_stream.py), [`StreamCapture._emit_tool`](../src/mcp_flightrecorder/integrations/_model_stream.py), [`read_chunk`](../src/mcp_flightrecorder/integrations/_model_stream.py), [`cleanup_stream`](../src/mcp_flightrecorder/integrations/_model_stream.py).
 
-**Invariants:** Wrapper invocation returns a deferred coroutine; native work and observation begin when awaited. The host drives every stream read and cleanup, without prefetch or forced draining. Normal return, error/cancellation, EOF-complete, early close and partial/gap outcomes remain distinct. Raw-body loss makes the aggregate partial; it does not itself make tool selection incomplete. Raw admission and omission rejoin selection inspection under its independent fragment pool and 64-choice/64-lifetime-key limits. Actual projection/selection gaps remain conservative; fragment or cardinality overflow stops further capture while native chunks still reach the host. Complete tool decisions require a supported function shape, usable name/argument fields, complete observed fragments and an accepted tool finish reason. Argument-JSON comparison availability is a separate check; gaps and early cleanup cannot manufacture completeness. Each available request, decision and response has a separate detached policy selection before observation; structured requests share core validation. Ordinary policy failure selects omission once without making complete source evidence partial. Process-control interruption can prevent native work, replace an outcome or withhold a consumed chunk; catching and resuming does not gain a cleanup or at-most-once policy guarantee.
+**Invariants:** Wrapper invocation returns a deferred coroutine; native work and observation begin when awaited. The host drives every stream read and cleanup, without prefetch or forced draining. Normal return, error/cancellation, EOF-complete, early close and partial/gap outcomes remain distinct. Opt-in OpenAI usage is detached before normal body projection/retention, or from the last eligible consumed aggregate before body/selection cutoff returns. The existing terminal attempt attaches the three-scalar snapshot, or three nulls if unavailable, and releases it in `finally`. Missing usage does not make content partial. Raw-body loss makes the aggregate partial; it does not itself make tool selection incomplete. Raw admission and omission rejoin selection inspection under its independent fragment pool and 64-choice/64-lifetime-key limits. Actual projection/selection gaps remain conservative; fragment or cardinality overflow stops further body/tool capture while native chunks still reach the host and eligible usage remains observable. Complete tool decisions require a supported function shape, usable name/argument fields, complete observed fragments and an accepted tool finish reason. Argument-JSON comparison availability is a separate check; gaps and early cleanup cannot manufacture completeness. Each available request, decision and response has a separate detached policy selection before observation; structured requests share core validation. Ordinary policy failure selects omission once without making complete source evidence partial. Process-control interruption can prevent native work, replace an outcome or withhold a consumed chunk; catching and resuming does not gain a cleanup or at-most-once policy guarantee.
 
 ```mermaid
 sequenceDiagram
@@ -469,6 +479,9 @@ sequenceDiagram
         F-->>H: Propagate same outcome
     else Normal response
         N-->>F: Original response
+        opt OpenAI record_usage enabled
+            F->>C: Snapshot explicit native usage before body projection
+        end
         F->>C: Select policy for each decision and response
         C->>C: Observe originals with separate retention
         F-->>H: Original response
@@ -479,7 +492,11 @@ sequenceDiagram
             H->>C: Ask for next chunk
             C->>N: Await native next
             N-->>C: Chunk / EOF / native error
-            opt Eligible consumed chunk
+            opt Consumed chunk, call not finished, OpenAI usage enabled
+                C->>C: Replace snapshot from eligible aggregate before capture cutoffs
+                Note over C,N: Explicit empty choices and non-null usage, last whole snapshot wins
+            end
+            opt Body and selection capture still eligible
                 C->>C: Trusted chunk projection
                 alt Raw retention open
                     C->>C: Try whole chunk in 1 MiB raw pool
@@ -510,6 +527,7 @@ sequenceDiagram
             C-->>H: Forward cleanup outcome, do not drain
         end
     end
+    Note over F,C: With OpenAI opt-in, terminal attaches snapshot or three nulls and releases it in finally
 ```
 
 ### M05 — MCP observation without invented attribution

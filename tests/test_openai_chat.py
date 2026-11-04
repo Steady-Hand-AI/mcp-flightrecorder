@@ -168,6 +168,21 @@ def test_model_labels_rejected_before_native_use(recording_factory, run_sdk_asyn
     check.equal(rows, [], msg="Rejected wrapper labels cannot allocate a recorder event.")
 
 
+@pytest.mark.parametrize("value", [None, 0, 1, "true", [], {}],
+                         ids=["null", "integer-zero", "integer-one", "string", "list", "mapping"])
+def test_record_usage_requires_exact_boolean(recording_factory, run_sdk_async, value):
+    rec, path = recording_factory()
+    requests = []
+
+    async def run():
+        async with native_client(lambda request: requests.append(request) or httpx2.Response(200, json=normal())) as client:
+            with pytest.raises(ValueError, match="^record_usage must be a boolean$"):
+                wrap_model(rec, client.chat.completions.create, instance_id="model", record_usage=value)
+
+    run_sdk_async(run())
+    assert requests == [] and persisted(rec, path)[0] == []
+
+
 def test_factory_binding_evidence_ownership_and_never_awaited(recording_factory, run_sdk_async):
     rec, path = recording_factory()
     requests, policy_calls = [], []
@@ -216,7 +231,8 @@ def test_normal_raw_fields_transport_exclusion_and_recorder_only_arguments(recor
     rec, path = recording_factory()
     raw = '{ "text" : "selected" }'
     output = normal(tools=[function_call(raw)], finish="tool_calls", content=None,
-                    usage={"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+                    usage={"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5,
+                           "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 1}},
                     future_json={"kept": [False, None, 0]})
     evidence, requests = ModelEvidence(), []
 
@@ -227,7 +243,7 @@ def test_normal_raw_fields_transport_exclusion_and_recorder_only_arguments(recor
     async def run():
         async with native_client(handler) as client:
             spy, seen = observed_method(client.chat.completions.create)
-            create = wrap_model(rec, spy, instance_id="model")
+            create = wrap_model(rec, spy, instance_id="model", record_usage=True)
             result = await create(model="fixture-model", messages=[{"role": "user", "content": "input"}],
                                   tools=TOOLS, temperature=0, user="explicit", store=False,
                                   max_tokens=omit, extra_body={}, extra_headers={"x-fixture": "header"},
@@ -235,7 +251,7 @@ def test_normal_raw_fields_transport_exclusion_and_recorder_only_arguments(recor
                                   annotations=[{"bindings": [], "unresolved": [], "complete": True}],
                                   insertions=(), evidence=evidence)
             check.is_true(result is seen["results"][0], msg="Nonstream observation returns the exact native ChatCompletion object.")
-            check.is_false(any(key in seen["kwargs"][0] for key in ("evidence", "annotations", "insertions")),
+            check.is_false(any(key in seen["kwargs"][0] for key in ("evidence", "annotations", "insertions", "record_usage")),
                            msg="Recorder-only options must never reach the pinned SDK method.")
             check.equal(result.to_dict(mode="json", use_api_names=True, exclude_unset=True), output,
                         msg="SDK projection preserves exposed usage, raw arguments and benign unknown JSON fields.")
@@ -255,7 +271,119 @@ def test_normal_raw_fields_transport_exclusion_and_recorder_only_arguments(recor
                 msg="Capture contains only explicitly submitted JSON body options, with omission sentinels and transport options excluded.")
     check.equal(rows[1]["body"], {"arguments_raw": raw}, msg="The decision preserves exact raw spacing without inventing parsed arguments.")
     check.equal(rows[2]["body"], output, msg="The retained normal response is the native exposed JSON, including unknown fields.")
+    assert rows[2]["details"]["usage"] == {"prompt_tokens": 2, "cached_tokens": 0, "cache_write_tokens": 1}
     check.equal(len(requests), 1, msg="Instrumentation contributes no additional native request.")
+
+
+@pytest.mark.parametrize("case,expected", [
+    ("default", None), ("disabled", None), ("reported", (100, 80, 10)),
+    ("absent", (None, None, None)), ("null", (None, None, None)),
+    ("empty", (None, None, None)), ("details-null", (100, None, None)),
+    ("cached-null", (100, None, 10)), ("write-missing", (100, 80, None)),
+    ("zeros", (0, 0, 0)), ("usage-unset", (None, None, None)),
+    ("prompt-unset", (None, 80, 10)), ("details-unset", (100, None, None)),
+    ("cached-unset", (100, None, 10)), ("write-unset", (100, 80, None)),
+    ("invalid-write", (100, 80, None)),
+])
+def test_native_usage_presence_preserves_unknowns_and_explicit_zero(
+        recording_factory, run_sdk_async, case, expected):
+    rec, path = recording_factory(capture="metadata")
+    usage = {"prompt_tokens": 100, "completion_tokens": 2, "total_tokens": 102,
+             "prompt_tokens_details": {"cached_tokens": 80, "cache_write_tokens": 10}}
+    output = normal(usage=usage)
+    if case == "absent":
+        del output["usage"]
+    elif case == "null":
+        output["usage"] = None
+    elif case == "empty":
+        output["usage"] = {}
+    elif case == "details-null":
+        usage["prompt_tokens_details"] = None
+    elif case == "cached-null":
+        usage["prompt_tokens_details"]["cached_tokens"] = None
+    elif case == "write-missing":
+        del usage["prompt_tokens_details"]["cache_write_tokens"]
+    elif case == "zeros":
+        usage["prompt_tokens"] = 0
+        usage["prompt_tokens_details"].update(cached_tokens=0, cache_write_tokens=0)
+    elif case == "invalid-write":
+        usage["prompt_tokens_details"]["cache_write_tokens"] = -1
+    evidence, seen = ModelEvidence(), []
+
+    async def run():
+        async with native_client(lambda request: httpx2.Response(200, json=output)) as client:
+            native = client.chat.completions.create
+
+            @wraps(native)
+            async def expose(**kwargs):
+                result = await native(**kwargs)
+                if case == "usage-unset":
+                    result.model_fields_set.discard("usage")
+                elif case == "details-unset":
+                    result.usage.model_fields_set.discard("prompt_tokens_details")
+                elif case in ("prompt-unset", "cached-unset", "write-unset"):
+                    model, field = ((result.usage, "prompt_tokens") if case == "prompt-unset" else
+                                    (result.usage.prompt_tokens_details,
+                                     "cached_tokens" if case == "cached-unset" else "cache_write_tokens"))
+                    # A native model may expose a zero default without reporting it.
+                    setattr(model, field, 0)
+                    model.model_fields_set.discard(field)
+                seen.append((kwargs, result))
+                return result
+
+            option = {} if case == "default" else {"record_usage": case != "disabled"}
+            result = await wrap_model(rec, expose, instance_id="model", **option)(
+                model="fixture-model", messages=[], evidence=evidence)
+            assert result is seen[0][1]
+            assert seen[0][0] == {"model": "fixture-model", "messages": []}
+            assert evidence.losses == ()
+            accepted(evidence.request)
+            accepted(evidence.response)
+
+    run_sdk_async(run())
+    rows, artifacts, _ = persisted(rec, path)
+    assert [row["kind"] for row in rows] == ["model.request", "model.response"]
+    response = rows[-1]
+    assert response["state"] == "complete" and response["details"]["complete"] is True
+    if expected is None:
+        assert "usage" not in response["details"]
+    else:
+        assert response["details"]["usage"] == dict(zip(
+            ("prompt_tokens", "cached_tokens", "cache_write_tokens"), expected, strict=True))
+    assert response["body"] is None
+    assert all(item["body_text"] is None or item["representation"] == "request_refs/2"
+               for item in artifacts.values())
+
+
+def test_optional_usage_access_failure_keeps_valid_siblings_and_content(
+        recording_factory, run_sdk_async, monkeypatch):
+    from openai.types.completion_usage import CompletionUsage
+
+    rec, path = recording_factory()
+    output = normal(usage={"prompt_tokens": 100, "completion_tokens": 2, "total_tokens": 102,
+                           "prompt_tokens_details": {"cached_tokens": 80, "cache_write_tokens": 10}})
+    original = CompletionUsage.__getattribute__
+
+    def inaccessible_prompt(self, name):
+        if name == "prompt_tokens":
+            raise ValueError("optional native usage access failed")
+        return original(self, name)
+
+    monkeypatch.setattr(CompletionUsage, "__getattribute__", inaccessible_prompt)
+    evidence = ModelEvidence()
+
+    async def run():
+        async with native_client(lambda request: httpx2.Response(200, json=output)) as client:
+            spy, seen = observed_method(client.chat.completions.create)
+            result = await wrap_model(rec, spy, instance_id="model", record_usage=True)(
+                model="fixture-model", messages=[], evidence=evidence)
+            assert result is seen["results"][0] and len(seen["kwargs"]) == 1
+            assert evidence.losses == ()
+
+    run_sdk_async(run())
+    rows, _, _ = persisted(rec, path)
+    assert rows[-1]["state"] == "complete" and rows[-1]["body"] == output
+    assert rows[-1]["details"]["usage"] == {"prompt_tokens": None, "cached_tokens": 80, "cache_write_tokens": 10}
 
 
 def test_execution_validation_error_keeps_native_stage_and_object(recording_factory, run_sdk_async):
@@ -547,11 +675,14 @@ def test_native_projection_failure_remains_partial_without_replacing_result(reco
         raise ValueError("controlled trusted-model projection failure")
 
     monkeypatch.setattr(ChatCompletion, "to_dict", unavailable_projection)
+    output = normal(usage={"prompt_tokens": 100, "completion_tokens": 2, "total_tokens": 102,
+                           "prompt_tokens_details": {"cached_tokens": 80, "cache_write_tokens": 10}})
 
     async def run():
-        async with native_client(lambda request: httpx2.Response(200, json=normal())) as client:
+        async with native_client(lambda request: httpx2.Response(200, json=output)) as client:
             spy, seen = observed_method(client.chat.completions.create)
-            result = await wrap_model(rec, spy, instance_id="model", retention_policy=policy)(model="fixture-model", messages=[], evidence=evidence)
+            result = await wrap_model(rec, spy, instance_id="model", retention_policy=policy,
+                                      record_usage=True)(model="fixture-model", messages=[], evidence=evidence)
             check.is_true(result is seen["results"][0], msg="A trusted model projection failure cannot replace the native response.")
             check.equal(result.choices[0].message.content, "observed", msg="The host still receives the native response's usable fields.")
 
@@ -561,6 +692,7 @@ def test_native_projection_failure_remains_partial_without_replacing_result(reco
     check.is_in("projection_failed", evidence.losses, msg="Failed trusted projection is visible in the bounded side channel.")
     check.is_none(rows[-1]["body"], msg="A failed projection stores MISSING instead of invoking an alternate serializer.")
     check.equal(rows[-1]["state"], "partial", msg="A missing normal response projection cannot be claimed as complete.")
+    assert rows[-1]["details"]["usage"] == {"prompt_tokens": 100, "cached_tokens": 80, "cache_write_tokens": 10}
 
 
 def test_capture_losses_log_without_evidence_or_private_content(
@@ -914,12 +1046,13 @@ def observed_next(native):
     return errors
 
 
-@pytest.mark.parametrize("action,consumed", [("zero-close", 0), ("one-close", 1), ("context", 1),
+@pytest.mark.parametrize("action,consumed", [("zero-close", 0), ("one-close", 1), ("context", 1), ("aggregate-close", 3),
                                              ("exhaust", 3), ("anext", 3), ("repeated-close", 1)])
 def test_stream_protocol_identity_and_counted_native_consumption(recording_factory, run_sdk_async, action, consumed):
     rec, path = recording_factory()
     values = [chunk([delta(content="first")]), chunk([delta(content="last", finish="stop")]),
-              chunk(usage={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3})]
+              chunk(usage={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3,
+                           "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 1}})]
     evidence = ModelEvidence()
 
     async def run_one(decorated):
@@ -928,8 +1061,9 @@ def test_stream_protocol_identity_and_counted_native_consumption(recording_facto
         async with native_client(stream_handler(peer)) as client:
             decoded = decoded_chunks(client)
             spy, calls = observed_method(client.chat.completions.create)
-            method = wrap_model(rec, spy, instance_id="model") if decorated else spy
+            method = wrap_model(rec, spy, instance_id="model", record_usage=True) if decorated else spy
             stream = await method(model="fixture-model", messages=[], stream=True,
+                                  stream_options={"include_usage": True},
                                   **({"evidence": evidence} if decorated else {}))
             await stream_checkpoint()
             check.equal(peer.reads, 0, msg="Returning a native or observed stream must not consume its first body frame.")
@@ -944,8 +1078,9 @@ def test_stream_protocol_identity_and_counted_native_consumption(recording_facto
                 async with stream as entered:
                     check.is_true(entered is stream, msg="Async context entry returns the stream object that the host is consuming.")
                     received.append(await entered.__anext__())
-            elif action in ("one-close", "repeated-close"):
-                received.append(await stream.__anext__())
+            elif action in ("one-close", "repeated-close", "aggregate-close"):
+                for _ in range(consumed):
+                    received.append(await stream.__anext__())
                 await stream.close()
                 if action == "repeated-close":
                     await stream.aclose()
@@ -966,6 +1101,9 @@ def test_stream_protocol_identity_and_counted_native_consumption(recording_facto
                           msg="Each returned chunk is exactly the model instance created by the actual SDK parser.")
             check.equal(foreign_stream_owners(peer, host), (), msg="Every actual body-read attempt and peer close must be driven by this stream's host, never by an added background consumer.")
             if decorated:
+                assert calls["kwargs"] == [{"model": "fixture-model", "messages": [], "stream": True,
+                                            "stream_options": {"include_usage": True}}]
+                assert stream._capture.call._usage is None
                 check.equal((stream._capture.chunks, stream._capture.tools, stream._capture.choices), ([], {}, {}),
                             msg="Terminal stream capture releases chunk, fragment and choice assembly state.")
                 check.equal((stream._capture.chunk_bytes, stream._capture.fragment_bytes), (0, 0),
@@ -983,6 +1121,181 @@ def test_stream_protocol_identity_and_counted_native_consumption(recording_facto
     check.equal(rows[-1]["body"], {"format": "openai_chat_stream/1", "chunks": values[:consumed]},
                 msg="The terminal stream payload is a named ordered observation of consumed chunks, not a fabricated ChatCompletion.")
     check.equal(rows[-1]["state"], "complete" if action in ("exhaust", "anext") else "partial", msg="Only fully witnessed exhaustion is complete; explicit early close remains partial.")
+    assert rows[-1]["details"]["usage"] == (
+        {"prompt_tokens": 1, "cached_tokens": 0, "cache_write_tokens": 1} if consumed == 3 else
+        {"prompt_tokens": None, "cached_tokens": None, "cache_write_tokens": None})
+
+
+@pytest.mark.parametrize("request_usage", [False, True], ids=["unrequested", "requested"])
+@pytest.mark.parametrize("record_usage", [False, True], ids=["disabled", "enabled"])
+def test_stream_usage_option_preserves_the_host_request_and_consumption(
+        recording_factory, run_sdk_async, request_usage, record_usage):
+    rec, path = recording_factory(capture="metadata")
+    evidence, requests, peers = ModelEvidence(), [], []
+    content = chunk([delta(content="private response", finish="stop")])
+    aggregate = chunk(usage={"prompt_tokens": 100, "completion_tokens": 2, "total_tokens": 102,
+                             "prompt_tokens_details": {"cached_tokens": 80, "cache_write_tokens": 10}})
+
+    async def handler(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        values = [content, aggregate] if body.get("stream_options", {}).get("include_usage") else [content]
+        peer = CountedBytes(values)
+        peers.append(peer)
+        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, stream=peer)
+
+    async def run():
+        async with native_client(handler) as client:
+            decoded = decoded_chunks(client)
+            spy, seen = observed_method(client.chat.completions.create)
+            kwargs = {"model": "fixture-model", "messages": [], "stream": True}
+            if request_usage:
+                kwargs["stream_options"] = {"include_usage": True}
+            stream = await wrap_model(rec, spy, instance_id="model", record_usage=record_usage)(
+                **kwargs, evidence=evidence)
+            assert peers[0].reads == 0 and peers[0].read_attempts == []
+            received = [value async for value in stream]
+            assert len(received) == (2 if request_usage else 1)
+            assert all(value is original for value, original in zip(received, decoded, strict=True))
+            await stream.aclose()
+            assert seen["kwargs"] == requests == [kwargs]
+            assert peers[0].closes == 1 and foreign_stream_owners(peers[0], asyncio.current_task()) == ()
+            assert stream._capture.call._usage is None
+            assert evidence.losses == ()
+
+    run_sdk_async(run())
+    rows, artifacts, _ = persisted(rec, path)
+    assert [row["kind"] for row in rows] == ["model.request", "model.response"]
+    assert rows[-1]["state"] == "complete" and rows[-1]["body"] is None
+    if record_usage:
+        assert rows[-1]["details"]["usage"] == (
+            {"prompt_tokens": 100, "cached_tokens": 80, "cache_write_tokens": 10} if request_usage else
+            {"prompt_tokens": None, "cached_tokens": None, "cache_write_tokens": None})
+    else:
+        assert "usage" not in rows[-1]["details"]
+    assert all(item["body_text"] is None or item["representation"] == "request_refs/2"
+               for item in artifacts.values())
+
+
+@pytest.mark.parametrize("case", ["content", "null-choices", "unset-choices"])
+def test_stream_usage_requires_explicit_empty_choices(recording_factory, run_sdk_async, case):
+    rec, path = recording_factory()
+    aggregate = chunk(id="usage-candidate", usage={
+        "prompt_tokens": 100, "completion_tokens": 2, "total_tokens": 102,
+        "prompt_tokens_details": {"cached_tokens": 80, "cache_write_tokens": 10}})
+    if case == "content":
+        aggregate["choices"] = [delta(content="gateway count of unknown finality", finish="stop")]
+    elif case == "null-choices":
+        aggregate["choices"] = None
+    values = [chunk([delta(content="first", finish="stop")]), aggregate]
+    evidence = ModelEvidence()
+
+    async def run():
+        async with native_client(stream_handler(CountedBytes(values))) as client:
+            decode = client._process_response_data
+
+            def expose(*args, **kwargs):
+                value = decode(*args, **kwargs)
+                if case == "unset-choices" and isinstance(value, ChatCompletionChunk) and value.id == "usage-candidate":
+                    value.model_fields_set.discard("choices")
+                    assert value.choices == [], "An unset native default is not an aggregate witness."
+                return value
+
+            client._process_response_data = expose
+            stream = await wrap_model(rec, client.chat.completions.create, instance_id="model", record_usage=True)(
+                model="fixture-model", messages=[], stream=True, evidence=evidence)
+            received = [value async for value in stream]
+            assert len(received) == 2
+            await stream.aclose()
+
+    run_sdk_async(run())
+    rows, _, _ = persisted(rec, path)
+    assert rows[-1]["details"]["usage"] == {"prompt_tokens": None, "cached_tokens": None, "cache_write_tokens": None}
+    assert rows[-1]["state"] == ("complete" if case == "content" else "partial")
+    assert evidence.losses == (() if case == "content" else ("partial_tool_call",))
+
+
+def test_stream_usage_last_snapshot_is_detached_and_call_local(recording_factory, run_sdk_async):
+    rec, path = recording_factory(capture="metadata")
+    first = chunk([delta(content="observed", finish="stop")])
+    initial_a = chunk(usage={"prompt_tokens": 100, "completion_tokens": 2, "total_tokens": 102,
+                            "prompt_tokens_details": {"cached_tokens": 80, "cache_write_tokens": 10}})
+    initial_b = chunk(usage={"prompt_tokens": 200, "completion_tokens": 2, "total_tokens": 202,
+                            "prompt_tokens_details": {"cached_tokens": 160, "cache_write_tokens": 20}})
+    last_a = chunk(usage={"prompt_tokens": 50, "completion_tokens": 2, "total_tokens": 52,
+                         "prompt_tokens_details": {"cache_write_tokens": 0}})
+    last_b = chunk(usage={})
+    unrelated = chunk([delta(content="gateway finality is unknown", finish="stop")], usage={
+        "prompt_tokens": 999, "completion_tokens": 2, "total_tokens": 1001,
+        "prompt_tokens_details": {"cached_tokens": 999, "cache_write_tokens": 999}})
+    values = {"A": [first, initial_a, last_a, unrelated, chunk(usage=None)],
+              "B": [first, initial_b, last_b, unrelated, chunk(usage=None)]}
+    evidence = {name: ModelEvidence() for name in values}
+    peers, requests = {}, []
+    expected = {"A": {"prompt_tokens": 50, "cached_tokens": None, "cache_write_tokens": 0},
+                "B": {"prompt_tokens": None, "cached_tokens": None, "cache_write_tokens": None}}
+
+    async def handler(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        label = body["messages"][0]["content"]
+        peers[label] = CountedBytes(values[label])
+        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, stream=peers[label])
+
+    async def run():
+        async with native_client(handler) as client:
+            spy, seen = observed_method(client.chat.completions.create)
+            create = wrap_model(rec, spy, instance_id="shared-model", record_usage=True)
+            streams, turns = {}, {}
+            for label in ("A", "B"):
+                with rec.turn(label) as turn:
+                    turns[label] = turn.receipt.turn_id
+                    streams[label] = await create(model="fixture-model", messages=[{"role": "user", "content": label}],
+                                                  stream=True, stream_options={"include_usage": True}, evidence=evidence[label])
+                assert peers[label].reads == 0
+                await streams[label].__anext__()
+            original_a = await streams["A"].__anext__()
+            original_b = await streams["B"].__anext__()
+            assert streams["A"]._capture.call._usage == {"prompt_tokens": 100, "cached_tokens": 80, "cache_write_tokens": 10}
+            assert streams["B"]._capture.call._usage == {"prompt_tokens": 200, "cached_tokens": 160, "cache_write_tokens": 20}
+            for original in (original_a, original_b):
+                original.usage.prompt_tokens = 999
+                original.usage.prompt_tokens_details.cached_tokens = 999
+                original.usage.prompt_tokens_details.cache_write_tokens = 999
+            assert streams["A"]._capture.call._usage == {"prompt_tokens": 100, "cached_tokens": 80, "cache_write_tokens": 10}
+            assert streams["B"]._capture.call._usage == {"prompt_tokens": 200, "cached_tokens": 160, "cache_write_tokens": 20}
+            for label in ("B", "A"):
+                await streams[label].__anext__()
+                assert streams[label]._capture.call._usage == expected[label]
+                for _ in range(2):
+                    await streams[label].__anext__()
+                    assert streams[label]._capture.call._usage == expected[label]
+            with pytest.raises(StopAsyncIteration):
+                await streams["B"].__anext__()
+            assert streams["B"]._capture.call._usage is None
+            assert streams["A"]._capture.call._usage == expected["A"]
+            with pytest.raises(StopAsyncIteration):
+                await streams["A"].__anext__()
+            for label, stream in streams.items():
+                assert stream._capture.call._usage is None
+                await stream.aclose()
+                assert peers[label].closes == 1
+                assert foreign_stream_owners(peers[label], asyncio.current_task()) == ()
+                assert evidence[label].losses == ()
+            assert len(seen["kwargs"]) == 2 and requests == seen["kwargs"]
+            return turns
+
+    turns = run_sdk_async(run())
+    rows, _, _ = persisted(rec, path)
+    assert [row["kind"] for row in rows] == ["model.request", "model.request", "model.response", "model.response"]
+    assert evidence["A"].request.model_call_id != evidence["B"].request.model_call_id
+    for label, item in evidence.items():
+        own = [row for row in rows if row["model_call_id"] == accepted(item.request).model_call_id]
+        assert [row["kind"] for row in own] == ["model.request", "model.response"]
+        assert all(row["turn_id"] == turns[label] for row in own)
+        assert own[-1]["details"]["usage"] == expected[label]
+        assert own[-1]["body"] is None and own[-1]["state"] == "complete"
+        accepted(item.response)
 
 
 @pytest.mark.parametrize("decorated", [False, True], ids=["native", "decorated"])
@@ -1676,7 +1989,8 @@ def test_stream_late_tool_survives_body_overflow(recording_factory, run_sdk_asyn
     else:
         values = [first, chunk([delta(content="x" * cap)]),
                   chunk([delta(tools=[tool], finish="tool_calls")])]
-    values.append(chunk(usage={"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}))
+    values.append(chunk(usage={"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3,
+                              "prompt_tokens_details": {"cached_tokens": 1, "cache_write_tokens": 0}}))
     evidence, policy_calls, full_encodings = ModelEvidence(), [], []
     original = _model_stream.encode_json
 
@@ -1696,7 +2010,7 @@ def test_stream_late_tool_survives_body_overflow(recording_factory, run_sdk_asyn
         async with native_client(stream_handler(peer)) as client:
             decoded = decoded_chunks(client)
             spy, calls = observed_method(client.chat.completions.create)
-            stream = await wrap_model(rec, spy, instance_id="model", retention_policy=policy)(
+            stream = await wrap_model(rec, spy, instance_id="model", retention_policy=policy, record_usage=True)(
                 model="fixture-model", messages=[], stream=True, evidence=evidence)
             assert peer.reads == 0
             consumed = []
@@ -1734,6 +2048,7 @@ def test_stream_late_tool_survives_body_overflow(recording_factory, run_sdk_asyn
     assert decision["name"] == "echo" and decision["details"]["provider_ref"] == "late-reference"
     assert decision["details"]["complete"] is True and decision["details"]["args_digest"]["value"] is not None
     assert response["state"] == "partial"
+    assert response["details"]["usage"] == {"prompt_tokens": 2, "cached_tokens": 1, "cache_write_tokens": 0}
     assert evidence.losses == ("stream_capture_limit",)
     aggregate = {"format": "openai_chat_stream/1", "chunks": normalized[:1]}
     assert policy_calls == [("model.request", {"model": "fixture-model", "messages": [], "stream": True}),
@@ -1890,11 +2205,13 @@ def test_stream_tool_key_limit_is_call_local_and_bounded(recording_factory, run_
 def test_stream_choice_states_are_bounded_without_tool_calls(recording_factory, run_sdk_async, count):
     rec, path = recording_factory()
     value = chunk([delta(index=index, content="observed", finish="stop") for index in range(count)])
+    aggregate = chunk(usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12,
+                             "prompt_tokens_details": {"cached_tokens": 8, "cache_write_tokens": 1}})
     evidence = ModelEvidence()
 
     async def run():
-        async with native_client(stream_handler(CountedBytes([value]))) as client:
-            stream = await wrap_model(rec, client.chat.completions.create, instance_id="model")(
+        async with native_client(stream_handler(CountedBytes([value, aggregate]))) as client:
+            stream = await wrap_model(rec, client.chat.completions.create, instance_id="model", record_usage=True)(
                 model="fixture-model", messages=[], stream=True, evidence=evidence)
             returned = await stream.__anext__()
             check.equal(len(returned.choices), count, msg="Choice-state limits cannot alter native response choices.")
@@ -1902,6 +2219,15 @@ def test_stream_choice_states_are_bounded_without_tool_calls(recording_factory, 
             assert 0 <= stream._capture.chunk_bytes <= 1_048_576
             assert 0 <= stream._capture.fragment_bytes <= 1_048_576
             assert stream._capture.chunk_bytes + stream._capture.fragment_bytes <= 2_097_152
+            assert stream._capture.stopped is (count > 64)
+            retained = tuple(stream._capture.chunks)
+            choices = dict(stream._capture.choices)
+            observed = await stream.__anext__()
+            assert observed.choices == [] and observed.usage.prompt_tokens == 10
+            assert stream._capture.stopped is (count > 64)
+            if count > 64:
+                assert tuple(stream._capture.chunks) == retained
+                assert stream._capture.choices == choices
             with pytest.raises(StopAsyncIteration):
                 await stream.__anext__()
 
@@ -1910,6 +2236,7 @@ def test_stream_choice_states_are_bounded_without_tool_calls(recording_factory, 
     check.equal(evidence.decisions, (), msg="Text-only choice accounting cannot create synthetic tool decisions.")
     check.equal(rows[-1]["state"], "complete" if count == 64 else "partial", msg="Only the exact state bound can retain complete choice-finish coverage.")
     check.equal("stream_capture_limit" in evidence.losses, count > 64, msg="Choice-state overflow uses the assigned stream_capture_limit code.")
+    assert rows[-1]["details"]["usage"] == {"prompt_tokens": 10, "cached_tokens": 8, "cache_write_tokens": 1}
 
 
 def test_chunk_projection_failure_and_close_after_recorder_shutdown(recording_factory, run_sdk_async, monkeypatch):
@@ -2121,7 +2448,9 @@ def test_model_selective_retention_preserves_originals_and_detaches_output(
     messages = [{"role": "system", "content": marker}, {"role": "user", "content": marker}]
     tools = [{"type": "function", "function": {"name": "echo", "description": marker}}]
     raw = '{"text":"model-private-Ω"}'
-    output = normal(tools=[function_call(raw)], finish="tool_calls", choice=3, content=marker)
+    output = normal(tools=[function_call(raw)], finish="tool_calls", choice=3, content=marker,
+                    usage={"prompt_tokens": 100, "completion_tokens": 2, "total_tokens": 102,
+                           "prompt_tokens_details": {"cached_tokens": 80, "cache_write_tokens": 10}})
     submitted = {"model": "fixture-model", "messages": messages, "tools": tools, "temperature": 0, "user": marker}
     snapshots, mappings, requests = [], [], []
     evidence = [ModelEvidence(), ModelEvidence()]
@@ -2148,6 +2477,8 @@ def test_model_selective_retention_preserves_originals_and_detaches_output(
             payload["arguments_raw"] = '{"text":"MASKED"}'
         else:
             payload["choices"][0]["message"]["content"] = "callback mutation"
+            payload["usage"]["prompt_tokens"] = 999
+            payload["usage"]["prompt_tokens_details"].update(cached_tokens=999, cache_write_tokens=999)
             payload = {"safe": "response"}
         mapping = {"policy_id": "model-mask", "retained": payload, "redacted": True,
                    "truncated": kind == "model.response"}
@@ -2170,7 +2501,7 @@ def test_model_selective_retention_preserves_originals_and_detaches_output(
             annotations = [{"bindings": [], "complete": True}, {"bindings": [{
                 "decision_event_id": original_decision.event_id, "pointer": "/content",
                 "result_event_id": None, "text_paths": [""]}], "complete": True}]
-            selected = wrap_model(rec, spy, instance_id="model", retention_policy=policy)
+            selected = wrap_model(rec, spy, instance_id="model", retention_policy=policy, record_usage=True)
             assert inspect.signature(selected) == inspect.signature(client.chat.completions.create)
             result = await selected(**submitted, evidence=evidence[1], annotations=annotations,
                 insertions=[{"source_event_id": source.event_id, "target_pointer": "/messages/1/content",
@@ -2231,6 +2562,8 @@ def test_model_selective_retention_preserves_originals_and_detaches_output(
     assert {row["model_call_id"] for row in rows[-3:]} == {selected_request["model_call_id"]}
     assert all(row["details"]["complete"] for row in rows if row["boundary"] == "model")
     assert selected_response["state"] == "complete"
+    assert "usage" not in rows[2]["details"], "The default opt-out remains absent even when native usage is present."
+    assert selected_response["details"]["usage"] == {"prompt_tokens": 100, "cached_tokens": 80, "cache_write_tokens": 10}
     inserted = [row for row in links if row["relation"] == "inserted_into"]
     assert [(row["source_event_id"], row["target_event_id"], row["target_pointer"]) for row in inserted] == [
         (source_id, selected_request["event_id"], "/messages/1/content")]
@@ -2383,7 +2716,9 @@ def test_model_policy_failures_omit_all_bodies_once_without_native_retry(
 @pytest.mark.parametrize("ordinary", ["null", "omission"])
 def test_model_retained_null_and_explicit_omission_remain_distinct(recording_factory, run_sdk_async, ordinary):
     rec, path = recording_factory()
-    output = normal(tools=[function_call()], finish="tool_calls")
+    output = normal(tools=[function_call()], finish="tool_calls",
+                    usage={"prompt_tokens": 100, "completion_tokens": 2, "total_tokens": 102,
+                           "prompt_tokens_details": {"cached_tokens": 80, "cache_write_tokens": 10}})
     evidence, calls = ModelEvidence(), []
 
     def policy(kind, payload, context):
@@ -2395,7 +2730,7 @@ def test_model_retained_null_and_explicit_omission_remain_distinct(recording_fac
     async def run():
         async with native_client(lambda request: httpx2.Response(200, json=output)) as client:
             spy, seen = observed_method(client.chat.completions.create)
-            result = await wrap_model(rec, spy, instance_id="model", retention_policy=policy)(
+            result = await wrap_model(rec, spy, instance_id="model", retention_policy=policy, record_usage=True)(
                 model="fixture-model", messages=[], tools=TOOLS, evidence=evidence)
             assert result is seen["results"][0] and len(seen["kwargs"]) == 1
 
@@ -2409,6 +2744,7 @@ def test_model_retained_null_and_explicit_omission_remain_distinct(recording_fac
         retained_artifact(artifacts[row["payload_ref"]], original, b'null' if ordinary == "null" else None,
                           "explicit", redacted=True, omitted=None if ordinary == "null" else "chosen-omission")
     assert evidence.losses == () and rows[-1]["state"] == "complete"
+    assert rows[-1]["details"]["usage"] == {"prompt_tokens": 100, "cached_tokens": 80, "cache_write_tokens": 10}
     assert all(receipt.status == "accepted" for receipt in [evidence.request, evidence.decisions[0].receipt, evidence.response])
 
 
@@ -2416,7 +2752,9 @@ def test_model_retained_null_and_explicit_omission_remain_distinct(recording_fac
 def test_model_metadata_overrides_valid_or_invalid_request_retention(recording_factory, run_sdk_async, invalid_request):
     rec, path = recording_factory(capture="metadata")
     evidence, calls = ModelEvidence(), []
-    output = normal(tools=[function_call()], finish="tool_calls")
+    output = normal(tools=[function_call()], finish="tool_calls",
+                    usage={"prompt_tokens": 100, "completion_tokens": 2, "total_tokens": 102,
+                           "prompt_tokens_details": {"cached_tokens": 80, "cache_write_tokens": 10}})
 
     def policy(kind, payload, context):
         calls.append(kind)
@@ -2433,7 +2771,7 @@ def test_model_metadata_overrides_valid_or_invalid_request_retention(recording_f
     async def run():
         async with native_client(lambda request: httpx2.Response(200, json=output)) as client:
             spy, seen = observed_method(client.chat.completions.create)
-            result = await wrap_model(rec, spy, instance_id="model", retention_policy=policy)(
+            result = await wrap_model(rec, spy, instance_id="model", retention_policy=policy, record_usage=True)(
                 model="fixture-model", messages=[{"role": "user", "content": "original"}], tools=TOOLS, evidence=evidence)
             assert result is seen["results"][0] and len(seen["kwargs"]) == 1
 
@@ -2450,6 +2788,7 @@ def test_model_metadata_overrides_valid_or_invalid_request_retention(recording_f
         assert artifact["observed_bytes"] > 0
     assert evidence.losses == (("retention_policy_failed",) if invalid_request else ())
     assert all(row["details"]["complete"] for row in rows) and rows[-1]["state"] == "complete"
+    assert rows[-1]["details"]["usage"] == {"prompt_tokens": 100, "cached_tokens": 80, "cache_write_tokens": 10}
     assert rec.close(timeout=3).run_close_state == "clean" and rec.health().dropped_events == 0
 
 

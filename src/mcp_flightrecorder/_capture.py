@@ -16,10 +16,19 @@ COMMON_FACTS = ("complete", "retention", "instance_id")
 OBSERVATIONS = {
     "model.request": ("model", ("message_path", "messages", "field_paths", "catalog_path", "insertions")),
     "model.tool_call": ("model", ("name", "model_call_id", "provider_ref")),
-    "model.response": ("model", ("model_call_id", "state")),
+    "model.response": ("model", ("model_call_id", "state", "usage")),
     "host.tool_result": ("host", ("sources", "text_paths")),
     "cache.served": (None, ("owner", "operation_id", "client_id", "cache_id", "cache_scope", "ttl_ms")),
 }
+
+
+def _normalize_usage(usage):
+    """Detach only the three optional reported counts; discard other values."""
+    normalized = {}
+    for name in ("prompt_tokens", "cached_tokens", "cache_write_tokens"):
+        value = usage.get(name) if type(usage) is dict else None
+        normalized[name] = value if type(value) is int and 0 <= value <= 2**63 - 1 else None
+    return normalized
 
 
 def encode(value):
@@ -193,6 +202,11 @@ class Preparation:
     def observe(self, kind, scope, payload, facts):
         if type(kind) is not str or kind not in OBSERVATIONS:
             raise InvalidInput("unsupported observation kind")
+        if kind == "model.response" and type(facts) is dict:
+            facts = facts.copy()
+            usage = facts.pop("usage", None)
+            if usage is not None:
+                facts["usage"] = _normalize_usage(usage)
         facts = freeze({} if facts is None else facts)
         boundary, specific = OBSERVATIONS[kind]
         fields(facts, (*COMMON_FACTS, *specific))
@@ -246,10 +260,12 @@ class Preparation:
             raise InvalidInput("unsupported model response state")
         _, losses = self._reference("model", facts.get("model_call_id"))
         event.update(model_call_id=facts.get("model_call_id"), state=state)
+        details = json.loads(event["details_json"])
         if losses:
-            details = json.loads(event["details_json"])
             details["unavailable_context"] = "model_request_unavailable"
-            event["details_json"] = json_text(details)
+        if "usage" in facts:
+            details["usage"] = facts["usage"]
+        event["details_json"] = json_text(details)
         return self._simple(event, payload, facts.get("retention"),
                             losses=losses, partial=not complete or state != "complete")
 

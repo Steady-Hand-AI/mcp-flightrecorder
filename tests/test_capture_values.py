@@ -1,4 +1,5 @@
 """Public capture freezing, retention and original-comparison evidence controls."""
+from collections.abc import Mapping
 from contextlib import closing
 import hashlib
 import hmac
@@ -222,6 +223,191 @@ def test_condition_key_ignores_dictionary_insertion_order(tmp_path):
         keys = [row[0] for row in db.execute("SELECT condition_key FROM turns")]
     assert len(keys) == 2, "both admitted turns are needed to compare equivalent condition encodings"
     check.equal(keys[0], keys[1], msg="canonical condition hashing sorts keys at every object depth")
+
+
+@pytest.mark.parametrize("usage,expected", [
+    ({"prompt_tokens": 0, "cached_tokens": 0, "cache_write_tokens": 0}, (0, 0, 0)),
+    ({"prompt_tokens": 2 ** 63 - 1, "cached_tokens": 2 ** 63 - 1,
+      "cache_write_tokens": 2 ** 63 - 1}, (2 ** 63 - 1,) * 3),
+    ({"prompt_tokens": 1, "cached_tokens": 2, "cache_write_tokens": 3}, (1, 2, 3)),
+    ({}, (None, None, None)),
+    ({"prompt_tokens": 10, "cached_tokens": 8}, (10, 8, None)),
+    ({"cached_tokens": 0}, (None, 0, None)),
+    ({"prompt_tokens": True, "cached_tokens": 8, "cache_write_tokens": 2}, (None, 8, 2)),
+    ({"prompt_tokens": 10, "cached_tokens": False, "cache_write_tokens": 2}, (10, None, 2)),
+    ({"prompt_tokens": 10, "cached_tokens": 8, "cache_write_tokens": 2.0}, (10, 8, None)),
+    ({"prompt_tokens": "10", "cached_tokens": 8, "cache_write_tokens": None}, (None, 8, None)),
+    ({"prompt_tokens": float("nan"), "cached_tokens": -1,
+      "cache_write_tokens": 2 ** 63}, (None, None, None)),
+    ({"prompt_tokens": HostileValue(), "cached_tokens": 8, "cache_write_tokens": 2}, (None, 8, 2)),
+    ([HostileValue()], (None, None, None)),
+], ids=["explicit-zero", "int64-maximum", "inconsistent-valid-reports", "empty-object",
+        "missing-write", "missing-prompt-and-write", "boolean-prompt", "boolean-cached",
+        "float-write", "string-prompt", "nonfinite-negative-overflow", "unsupported-count",
+        "non-dictionary"])
+def test_response_usage_normalizes_counts_without_rejecting_response(tmp_path, usage, expected):
+    path = tmp_path / "response-usage.sqlite"
+    recorder = Recorder(path, capture="metadata", coverage=COVERAGE)
+    original = dict(usage) if type(usage) is dict else None
+    try:
+        with recorder.turn("usage counts") as turn:
+            accept(turn.receipt)
+            source = observe(recorder, "model.request", {"messages": []}, messages=[])
+            facts = {"model_call_id": source.model_call_id, "instance_id": "usage-model", "usage": usage}
+            response = accept(recorder.observe("model.response", scope=recorder.capture_scope(),
+                payload={"secret": "unretained-response-body"}, facts=facts))
+            assert facts["usage"] is usage, "Normalization must not replace the caller's usage value."
+            if original is not None:
+                assert set(usage) == set(original) and all(usage[key] is value for key, value in original.items()), \
+                    "Missing and invalid counts must remain unchanged in the caller's dictionary."
+    finally:
+        closed = recorder.close()
+    assert closed.writer_stopped and closed.portable
+    check.equal(closed.run_close_state, "clean", msg="Unavailable optional counts do not make valid capture partial.")
+    with closing(sqlite3.connect(path)) as db:
+        details = event_details(db, response.event_id)
+        check.equal(details, {"complete": True, "instance_id": "usage-model", "capture_losses": ["body_omitted"],
+                              "usage": dict(zip(("prompt_tokens", "cached_tokens", "cache_write_tokens"), expected))},
+                    msg="Only the three exact int64-or-null counts are merged with existing response details.")
+        check.is_not_in("unretained-response-body", "\n".join(db.iterdump()),
+                        msg="Preserving usage never requires storing the omitted response body.")
+        check.equal(db.execute("SELECT capture_state FROM turns").fetchone()[0], "complete",
+                    msg="Invalid or missing optional usage does not lose the response observation.")
+    check.equal((recorder.health().dropped_events, recorder.health().writer_errors), (0, 0),
+                msg="Optional normalization does not drop an otherwise valid response.")
+
+
+def test_response_usage_ignores_extra_trees_and_detaches_before_admission(tmp_path, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+    original_persist = Recorder._persist_bundle
+
+    def hold_first(self, connection, bundle):
+        if not entered.is_set():
+            entered.set()
+            if not release.wait(10):
+                raise RuntimeError("test-owned usage barrier was not released")
+        return original_persist(self, connection, bundle)
+
+    monkeypatch.setattr(Recorder, "_persist_bundle", hold_first)
+    path = tmp_path / "usage-snapshot.sqlite"
+    recorder = Recorder(path, capture="metadata", coverage=COVERAGE)
+    discarded = []
+    discarded.append(discarded)
+    hostile = HostileValue()
+    usage = {"prompt_tokens": 100, "cached_tokens": 80, "cache_write_tokens": 20,
+             "cycle": discarded, "unsupported": hostile, 7: float("inf")}
+    try:
+        with recorder.turn("usage ownership") as turn:
+            accept(turn.receipt)
+            assert entered.wait(5), "Writer must be held before mutating admitted caller facts."
+            source = observe(recorder, "model.request", {"messages": []}, messages=[])
+            facts = {"model_call_id": source.model_call_id, "instance_id": "before", "usage": usage}
+            response = accept(recorder.observe("model.response", scope=recorder.capture_scope(),
+                payload={}, facts=facts))
+            assert facts["usage"] is usage and facts["instance_id"] == "before"
+            assert (usage["prompt_tokens"], usage["cached_tokens"], usage["cache_write_tokens"]) == (100, 80, 20)
+            assert usage["cycle"] is discarded and discarded[0] is discarded
+            assert usage["unsupported"] is hostile and usage[7] == float("inf")
+            usage.update(prompt_tokens=999, cached_tokens=998, cache_write_tokens=997)
+            facts.update(instance_id="after", usage={"prompt_tokens": 1})
+    finally:
+        release.set()
+        closed = recorder.close()
+    assert closed.writer_stopped and closed.portable
+    with closing(sqlite3.connect(path)) as db:
+        check.equal(event_details(db, response.event_id),
+                    {"complete": True, "instance_id": "before", "capture_losses": ["body_omitted"],
+                     "usage": {"prompt_tokens": 100, "cached_tokens": 80, "cache_write_tokens": 20}},
+                    msg="Discarded extras are never frozen and post-admission mutation cannot change selected counts.")
+    check.equal(closed.run_close_state, "clean", msg="Discarded malformed extras are not evidence loss.")
+
+
+def test_response_usage_does_not_invoke_custom_mapping_or_integer_hooks(tmp_path):
+    touches = []
+
+    def forbidden(self, *args, **kwargs):
+        touches.append(type(self).__name__)
+        raise AssertionError("optional usage must not invoke custom hooks")
+
+    class CustomDictionary(dict):
+        __getitem__ = __iter__ = __len__ = get = items = keys = forbidden
+
+    class CustomMapping(Mapping):
+        __getitem__ = __iter__ = __len__ = forbidden
+
+    class CustomInteger(int):
+        __int__ = __index__ = __lt__ = __le__ = __gt__ = __ge__ = forbidden
+
+    path = tmp_path / "usage-hooks.sqlite"
+    recorder = Recorder(path, capture="metadata", coverage=COVERAGE)
+    receipts = []
+    try:
+        with recorder.turn("usage hooks") as turn:
+            accept(turn.receipt)
+            source = observe(recorder, "model.request", {"messages": []}, messages=[])
+            for usage in (CustomDictionary(prompt_tokens=10), CustomMapping(),
+                          {"prompt_tokens": CustomInteger(10), "cached_tokens": 8, "cache_write_tokens": 2}):
+                receipts.append(observe(recorder, "model.response", {},
+                    model_call_id=source.model_call_id, usage=usage))
+    finally:
+        closed = recorder.close()
+    assert closed.writer_stopped and closed.portable
+    check.equal(touches, [], msg="Nonordinary dictionaries and nonexact integers are treated as unavailable without hooks.")
+    with closing(sqlite3.connect(path)) as db:
+        check.equal([event_details(db, receipt.event_id)["usage"] for receipt in receipts],
+                    [{"prompt_tokens": None, "cached_tokens": None, "cache_write_tokens": None}] * 2
+                    + [{"prompt_tokens": None, "cached_tokens": 8, "cache_write_tokens": 2}],
+                    msg="Custom usage containers normalize to nulls and a custom integer does not erase valid siblings.")
+
+
+def test_response_usage_none_is_absent_and_unrelated_inputs_remain_strict(tmp_path):
+    class CustomFacts(dict):
+        pass
+
+    path = tmp_path / "usage-boundary.sqlite"
+    recorder = Recorder(path, capture="content", coverage=COVERAGE)
+    absent = []
+    rejected = []
+    usage = {"prompt_tokens": 10, "cached_tokens": 8, "cache_write_tokens": 2}
+    try:
+        with recorder.turn("usage boundary") as turn:
+            accept(turn.receipt)
+            source = observe(recorder, "model.request", {"messages": []}, messages=[])
+            for provided in (False, True):
+                facts = {"model_call_id": source.model_call_id}
+                if provided:
+                    facts["usage"] = None
+                absent.append(accept(recorder.observe("model.response", scope=recorder.capture_scope(),
+                    payload={}, facts=facts)))
+                assert ("usage" in facts) is provided, "Removing direct None must not mutate caller facts."
+            for facts, payload in (
+                ({"model_call_id": source.model_call_id, "usage": usage, "complete": "yes"}, {}),
+                ({"model_call_id": source.model_call_id, "usage": usage, "state": "invented"}, {}),
+                ({"model_call_id": source.model_call_id, "usage": usage, "unexpected": 1}, {}),
+                ({"model_call_id": source.model_call_id, "usage": usage}, HostileValue()),
+                ({"model_call_id": source.model_call_id, "usage": usage,
+                  "retention": {"retained": HostileValue()}}, {}),
+            ):
+                rejected.append(recorder.observe("model.response", scope=recorder.capture_scope(),
+                    payload=payload, facts=facts))
+            rejected.append(recorder.observe("host.tool_result", scope=recorder.capture_scope(),
+                payload={}, facts={"usage": usage}))
+            rejected.append(recorder.observe("model.request", scope=recorder.capture_scope(),
+                payload={"messages": []}, facts={"messages": [], "usage": usage}))
+            rejected.append(recorder.observe("model.response", scope=recorder.capture_scope(),
+                payload={}, facts=CustomFacts(model_call_id=source.model_call_id, usage=usage)))
+    finally:
+        closed = recorder.close()
+    assert closed.writer_stopped and closed.portable
+    for receipt in rejected:
+        check.equal((receipt.status, receipt.reason, receipt.event_id), ("rejected", "invalid_input", None),
+                    msg="Usage is optional only for response facts; unrelated admission stays strict.")
+    with closing(sqlite3.connect(path)) as db:
+        for receipt in absent:
+            check.is_not_in("usage", event_details(db, receipt.event_id),
+                            msg="Absent usage and an explicit public None both omit the key.")
+        check.equal(db.execute("SELECT COUNT(*) FROM events WHERE kind='model.response'").fetchone()[0], 2,
+                    msg="Invalid unrelated facts or payloads never become persisted responses.")
 
 
 def test_metadata_omission_preserves_original_comparison_and_clean_capture(tmp_path):

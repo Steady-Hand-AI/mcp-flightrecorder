@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add opt-in OpenAI response usage capture for prompt, cache-read and cache-write counts independently of body retention, with a documented timeline query through the existing `fr sql` command.
 - Add canonical repository, issue-tracker and documentation links; clarify source installation and public test recipes.
 - Exclude local planning, agent instructions, credentials and generated evidence from source distributions.
 - Make snapshot-path and SQL-formatting tests portable across macOS path aliases and SQLite versions without changing runtime behavior.

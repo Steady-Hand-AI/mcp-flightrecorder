@@ -78,6 +78,124 @@ def test_query_scalar_and_binding_values(query_recording, sql, params, columns, 
     check.equal(_fingerprint(query_recording), before, msg="Even SQL-looking bound text cannot modify source rows or content.")
 
 
+def test_documented_response_usage_sql_api_and_installed_cli(tmp_path):
+    documented_sql = """
+SELECT sequence, event_id, model_call_id,
+       json_extract(details_json, '$.usage.prompt_tokens') AS prompt_tokens,
+       json_extract(details_json, '$.usage.cached_tokens') AS cached_tokens,
+       json_extract(details_json, '$.usage.cache_write_tokens') AS cache_write_tokens,
+       CASE
+         WHEN json_type(details_json, '$.usage.prompt_tokens') = 'integer'
+          AND json_type(details_json, '$.usage.cached_tokens') = 'integer'
+          AND json_extract(details_json, '$.usage.prompt_tokens') > 0
+          AND json_extract(details_json, '$.usage.cached_tokens') >= 0
+          AND json_extract(details_json, '$.usage.cached_tokens')
+              <= json_extract(details_json, '$.usage.prompt_tokens')
+         THEN 1.0 * json_extract(details_json, '$.usage.cached_tokens')
+              / json_extract(details_json, '$.usage.prompt_tokens')
+       END AS read_fraction
+FROM observed_events
+WHERE run_id = ? AND kind = 'model.response' AND sequence > ?
+ORDER BY sequence
+"""
+    guide = (Path(__file__).resolve().parents[1] / "docs" / "integrations.md").read_text(encoding="utf-8")
+    assert 'fr sql "run.sqlite" "' + documented_sql + '" --params \'["RUN_ID", -1]\' --limit 100' in guide, \
+        "Exercise the literal user-facing recipe, including its existing type and nonnegative guards."
+
+    path = tmp_path / "response usage ? #.sqlite"
+    recorder = Recorder(path, capture="metadata",
+        coverage={"producers": {"model": "query.usage", "host": "query.host", "mcp": None}, "model_complete": True})
+    run_id = recorder.capture_scope().run_id
+    responses = []
+    cases = [
+        ({"prompt_tokens": 10000, "cached_tokens": 8000, "cache_write_tokens": 1000}, [10000, 8000, 1000, 0.8]),
+        ({"prompt_tokens": 10, "cached_tokens": 8}, [10, 8, None, 0.8]),
+        ({"prompt_tokens": 10, "cached_tokens": 0, "cache_write_tokens": 0}, [10, 0, 0, 0.0]),
+        (None, [None, None, None, None]),
+        ({"prompt_tokens": 0, "cached_tokens": 0, "cache_write_tokens": 0}, [0, 0, 0, None]),
+        ({"prompt_tokens": 10, "cached_tokens": 11, "cache_write_tokens": 1}, [10, 11, 1, None]),
+        ({"prompt_tokens": 20, "cache_write_tokens": 3}, [20, None, 3, None]),
+        ({"cached_tokens": 4, "cache_write_tokens": 2}, [None, 4, 2, None]),
+    ]
+    try:
+        with recorder.turn("response usage query") as turn:
+            assert turn.receipt.status == "accepted"
+            requests = []
+            for _ in range(2):
+                request = recorder.observe("model.request", scope=recorder.capture_scope(),
+                    payload={"messages": []}, facts={"messages": []})
+                assert request.status == "accepted"
+                requests.append(request)
+            # Responses finish in reverse request order; two distinct responses share the first call ID.
+            calls = [requests[1].model_call_id, requests[0].model_call_id, requests[0].model_call_id]
+            for index, (usage, _) in enumerate(cases):
+                if index < len(calls):
+                    call_id = calls[index]
+                else:
+                    request = recorder.observe("model.request", scope=recorder.capture_scope(),
+                        payload={"messages": []}, facts={"messages": []})
+                    assert request.status == "accepted"
+                    call_id = request.model_call_id
+                facts = {"model_call_id": call_id}
+                if usage is not None:
+                    facts["usage"] = usage
+                response = recorder.observe("model.response", scope=recorder.capture_scope(),
+                    payload={"content": "unretained usage response"}, facts=facts)
+                assert response.status == "accepted"
+                responses.append(response)
+    finally:
+        closed = recorder.close()
+    assert closed.writer_stopped and closed.portable
+    assert closed.run_close_state == "clean"
+
+    before = _fingerprint(path)
+    full = inspect.query(path, documented_sql, [run_id, -1], limit=100)
+    data = _data(full)
+    check.is_none(full["error"], msg="The literal query must complete successfully on finalized public capture.")
+    check.equal(full["cutoffs"], [], msg="All eight observed responses fit the documented first-page limit.")
+    check.equal(data["columns"], ["sequence", "event_id", "model_call_id", "prompt_tokens", "cached_tokens",
+                                  "cache_write_tokens", "read_fraction"],
+                msg="The recipe exposes the three independent counts and only the guarded derived fraction.")
+    check.equal([row[1:] for row in data["rows"]],
+                [[response.event_id, response.model_call_id, *values]
+                 for response, (_, values) in zip(responses, cases)],
+                msg="Response order, repeated call IDs, absent usage/writes, zero and invalid fractions remain distinct.")
+    sequences = [row[0] for row in data["rows"]]
+    assert len(sequences) == len(cases) and sequences == sorted(set(sequences)) and sequences[0] > -1
+    check.equal((data["returned_rows"], data["has_more"]), (len(cases), False),
+                msg="The unbounded fixture page retains even a response with no usage facts.")
+    check.equal(_data(inspect.query(path, documented_sql, ["other-run", -1]))["rows"], [],
+                msg="Run selection is an explicit binding, not inferred from whichever response is latest.")
+
+    fr_executable = Path(sys.executable).with_name("fr")
+    assert fr_executable.is_file(), "Install the candidate in the test environment first"
+    cwd = tmp_path / "usage-cli-cwd"
+    cwd.mkdir()
+    after_sequence = -1
+    for expected_rows in (data["rows"][:2], data["rows"][2:4]):
+        params = [run_id, after_sequence]
+        page = inspect.query(path, documented_sql, params, limit=2)
+        page_data = _data(page)
+        check.is_none(page["error"], msg="Only a successful page supplies its continuation sequence.")
+        check.equal(page_data["rows"], expected_rows, msg="The continuation selects the next observed response events.")
+        check.equal((page_data["returned_rows"], page_data["has_more"]), (2, True),
+                    msg="The two-row pages report the existing bounded lookahead.")
+        check.equal([cutoff["code"] for cutoff in page["cutoffs"]], ["item_limit"],
+                    msg="A successful limited page retains the existing item-limit cutoff.")
+        argv = [str(fr_executable), "sql", str(path), documented_sql,
+                "--params", json.dumps(params), "--limit", "2"]
+        process = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=20)
+        assert process.returncode == 0, process.stderr
+        assert process.stdout, "Installed fr sql must return the successful page's JSON envelope."
+        cli = json.loads(process.stdout)
+        check.equal(process.stderr, "", msg="The successful recipe writes no diagnostic traceback.")
+        check.equal(process.stdout, _encoded(cli).decode() + "\n", msg="The recipe retains the existing single JSON CLI envelope.")
+        check.equal(cli, page, msg="The installed CLI executes the literal recipe with identical values and continuation.")
+        assert page_data["rows"], "Continuation requires an actual last returned sequence."
+        after_sequence = page_data["rows"][-1][0]
+    check.equal(_fingerprint(path), before, msg="Public and CLI usage inspection leave the finalized recording unchanged.")
+
+
 @pytest.mark.parametrize("expression,expected", [
     ("abs(-2)", 2), ("avg(2)", 2.0), ("count(*)", 1), ("sum(3)", 3), ("total(3)", 3.0),
     ("min(2,3)", 2), ("max(2,3)", 3), ("round(1.25,1)", 1.3), ("coalesce(NULL,2)", 2),

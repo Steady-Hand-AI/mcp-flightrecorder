@@ -5,6 +5,7 @@ from openai import NotGiven, Omit
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from .. import MISSING
+from .._capture import _normalize_usage
 from ._common import EvidenceBase, capture_call, copy_json, policy_retention
 
 
@@ -104,6 +105,17 @@ def project_model(value, *, chunk=False):
     return result
 
 
+def _reported_field(model, name):
+    """Read an explicitly present SDK field without serializing its owner."""
+    try:
+        fields = getattr(model, "model_fields_set", None)
+        if fields is not None and name in fields:
+            return getattr(model, name, None)
+    except Exception:
+        pass
+    return None
+
+
 def function_fields(tool):
     """Expose function fields without parsing or normalizing raw arguments."""
     function = tool.get("function")
@@ -122,13 +134,40 @@ def function_fields(tool):
 
 class ModelCall:
     """One invocation's fixed scope, admitted receipts, and terminal transition."""
-    def __init__(self, recorder, scope, instance_id, evidence, *, retention_policy=None):
+    def __init__(self, recorder, scope, instance_id, evidence, *, retention_policy=None,
+                 record_usage=False):
         self.recorder, self.scope = recorder, scope
         self.instance_id, self.evidence = instance_id, evidence
         self.retention_policy = retention_policy
+        self.record_usage = record_usage
+        self._usage = None
         self.partial = bool(evidence.losses)
         self.finished = False
         self._entries = []
+
+    def observe_usage(self, native, *, chunk=False):
+        if not self.record_usage:
+            return
+        try:
+            expected = ChatCompletionChunk if chunk else ChatCompletion
+            if not isinstance(native, expected):
+                return
+            if chunk:
+                choices = _reported_field(native, "choices")
+                if type(choices) is not list or choices:
+                    return
+            usage = _reported_field(native, "usage")
+            if usage is None:
+                return
+            details = _reported_field(usage, "prompt_tokens_details")
+            self._usage = _normalize_usage({
+                "prompt_tokens": _reported_field(usage, "prompt_tokens"),
+                "cached_tokens": _reported_field(details, "cached_tokens"),
+                "cache_write_tokens": _reported_field(details, "cache_write_tokens"),
+            })
+        except Exception:
+            # Optional counters never change native execution or body quality.
+            return
 
     def loss(self, reason):
         self.partial = True
@@ -181,9 +220,15 @@ class ModelCall:
         self.finished = True
         if state == "complete" and self.partial:
             state = "partial"
-        self.evidence.response = self.observe("model.response", payload,
-                                             model_call_id=self.model_call_id,
-                                             state=state, complete=state == "complete")
+        facts = {}
+        if self.record_usage:
+            facts["usage"] = self._usage if self._usage is not None else _normalize_usage(None)
+        try:
+            self.evidence.response = self.observe("model.response", payload,
+                                                 model_call_id=self.model_call_id,
+                                                 state=state, complete=state == "complete", **facts)
+        finally:
+            self._usage = None
 
     def _normal_tool(self, tool, choice, position, finish, seen):
         if type(tool) is not dict or tool.get("type") != "function":
@@ -221,6 +266,7 @@ class ModelCall:
             self._normal_tool(tool, choice["index"], position, choice.get("finish_reason"), seen)
 
     def normal(self, native):
+        self.observe_usage(native)
         try:
             payload = project_model(native)
         except Exception:

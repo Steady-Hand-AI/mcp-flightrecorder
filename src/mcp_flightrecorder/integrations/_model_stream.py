@@ -188,7 +188,10 @@ class StreamCapture:
         self._finish_choice(index, choice.get("finish_reason"))
 
     def consume(self, native):
-        if self.stopped or self.call.finished:
+        if self.call.finished:
+            return
+        self.call.observe_usage(native, chunk=True)
+        if self.stopped:
             return
         try:
             projection = project_model(native, chunk=True)

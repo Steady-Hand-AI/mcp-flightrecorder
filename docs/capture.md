@@ -1,6 +1,6 @@
 # Capture API
 
-**Package 0.5.16 · schema 6.** This is the SDK-free producer contract. See [Architecture](architecture.md) for storage ownership and [Integrations](integrations.md) for native SDK adapters.
+**Package 0.5.17 · schema 6.** This is the SDK-free producer contract. See [Architecture](architecture.md) for storage ownership and [Integrations](integrations.md) for native SDK adapters.
 
 ## 1. Construction and values
 
@@ -83,7 +83,7 @@ Only the following `observe` kinds are public. Unknown kinds/fields reject the a
 |---|---|
 | `model.request` / model | Original submitted JSON. `message_path="/messages"`, `messages=null`, `field_paths=[]`, `catalog_path=null`, `insertions=[]`. Core creates a model-call ID. |
 | `model.tool_call` / model | Object containing `arguments` (parsed JSON when exposed), optionally `arguments_raw` (exposed raw string); either may be absent. `name` (string or null when unexposed), `model_call_id=null`, `provider_ref=null` (string). Core creates decision/event IDs and `args_digest`. |
-| `model.response` / model | Original consumed response; `model_call_id=null`, `state="complete"` (`complete`, `partial`, `error`, `cancelled`). Usage remains in payload as exposed. This closes that model-call observation; a non-complete state overrides `complete=true` for completeness. |
+| `model.response` / model | Original consumed response; `model_call_id=null`, `state="complete"` (`complete`, `partial`, `error`, `cancelled`), optional `usage=None`. Non-null usage is normalized into response details independently of body retention. This closes that model-call observation; a non-complete state overrides `complete=true` for completeness. |
 | `host.tool_result` / host | Original prepared material; `sources=[]`, `text_paths=null`. Creates the prepared-material event and witnessed `transformed_from` links. |
 | `cache.served` / host or mcp | Exposed served content, or MISSING. `owner` (`host`, `client`), `operation_id=null`, `client_id=null`, `cache_id=null`, `cache_scope=null`, `ttl_ms=null`. Host owner selects host boundary; client selects mcp. IDs/cache scope are strings; TTL is finite nonnegative milliseconds. |
 
@@ -100,6 +100,14 @@ Freeze originals, annotations and retention together. Calculate message handles 
 `sources` is a list of `{event_id, slot="payload", pointer=""}`; slot is `payload` or `catalog`. Source IDs may be symbolic, preserving missing-source diagnostics. `insertions` is a list of `{source_event_id, target_pointer, content}` explicitly attached to this request only. `content` is the observed prepared original supplied by the host hook; compare it against the actual destination before producing `inserted_into`, witnessed by this request, targeting `payload`. Compare typed canonical JSON encodings, not Python `==` (`true` and `1` differ). An absent/mismatched destination yields a diagnostic without an insertion claim. Equality verifies a stated destination; it never discovers provenance. Insertion evidence is attached to the submitted request, with no ambient context stash.
 
 For example, a host-observed user message known to contain no tool answer may use `messages=[{"bindings": []}]` alongside its actual payload. A tool-result message instead carries its real decision event, optional result event, pointer and text paths. An empty binding list is not a shortcut for unknown history. Missing or incomplete annotations prevent reusable identity, can retain fresh message bodies on later requests and amplify storage cost as history grows; explicit unresolved/partial diagnostics remain truthful. No body omission or fabricated attribution is used to make that workload look smaller.
+
+### Optional response usage
+
+Only `model.response` accepts a `usage` fact. A non-null value produces an object in the event's existing `details_json` with exactly `prompt_tokens`, `cached_tokens` and `cache_write_tokens`. Each count is an exact built-in integer in `0..2**63-1`, or null. Missing or invalid counts, including booleans, floats, negatives and out-of-range integers, become null independently; valid siblings survive. Numerically inconsistent valid reports, such as cached tokens exceeding prompt tokens, are preserved as reported.
+
+For ordinary-dict facts, core verifies that every outer key is an exact built-in string before looking up usage, then shallow-copies the dictionary and normalizes non-null usage before freezing the remaining facts. Invalid outer keys are rejected as `invalid_input` while later valid observations remain admissible. Core shallowly enumerates an ordinary usage dictionary's entries and selects only the three exact built-in string counter keys, using each entry's value without a second lookup. Unsupported keys are ignored without invoking their hooks; discarded value trees are not traversed and custom mapping hooks are not invoked. A non-null non-dictionary usage value yields three nulls. Absent usage or direct `usage=None` leaves the key absent. Caller data stays unchanged. State, scope, payload, retention and unrelated fact validation retain their existing strict rules.
+
+Usage is a provider report supplied by the producer, not a verified bill or an inferred cache hit. Its counts remain available when response content is replaced, omitted or captured in metadata mode; preserving usage does not retain a response body. Token counts can still be sensitive metadata. The OpenAI adapter's opt-in and the existing SQL inspection recipe are described in [Integrations](integrations.md#opt-in-response-usage).
 
 ## 4. Dispatch and MCP lifecycle
 

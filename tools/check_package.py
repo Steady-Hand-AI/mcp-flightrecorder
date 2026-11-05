@@ -227,7 +227,7 @@ def inventory(members: dict[str, bytes]) -> list[dict]:
 def check(source: Path, wheel: Path | None = None, sdist: Path | None = None) -> dict:
     members = read_source(source)
     project = tomllib.loads(members["pyproject.toml"].decode())["project"]
-    require(project["name"] == "mcp-flightrecorder" and project["version"] == "0.5.16"
+    require(project["name"] == "mcp-flightrecorder" and project["version"] == "0.5.17"
             and project["requires-python"] == ">=3.11" and project["license"] == "Apache-2.0"
             and project["urls"] == URLS and project["readme"] == "README.md", "incorrect project identity")
     report = {"status": "PASS", "source": inventory(members)}

@@ -1,6 +1,6 @@
 # SDK and host integrations
 
-**Package 0.5.16.** Integrations wrap callables or sessions the host already owns. They observe exposed requests, results and consumed stream chunks; they do not create a client-routing layer, infer provider-ID associations or take over application cleanup.
+**Package 0.5.17.** Integrations wrap callables or sessions the host already owns. They observe exposed requests, results and consumed stream chunks; they do not create a client-routing layer, infer provider-ID associations or take over application cleanup.
 
 The recorder core has no SDK dependency. Import an adapter explicitly after installing the matching extra or test profile. Separate dependency environments are necessary for incompatible MCP versions; [Testing](testing.md) lists the profiles.
 
@@ -8,7 +8,7 @@ The recorder core has no SDK dependency. Import an adapter explicitly after inst
 
 | Module under `mcp_flightrecorder.integrations` | Entry point | Package extra / minimum exercised SDK baseline |
 |---|---|---|
-| `openai_chat` | `wrap_model(recorder, native_create, *, instance_id, retention_policy=None)` | `openai-chat`: `openai>=3.35.1` |
+| `openai_chat` | `wrap_model(recorder, native_create, *, instance_id, retention_policy=None, record_usage=False)` | `openai-chat`: `openai>=3.35.1` |
 | `anyllm_ollama` | `wrap_model(recorder, native_acompletion, *, instance_id, retention_policy=None)` | `anyllm-ollama`: `any-llm-sdk[ollama]>=1.29.0`, `ollama>=0.6.3` |
 | `mcp_client` | `wrap_mcp(recorder, native_client, *, client_id, server_key=None, retention_policy=None)` | `mcp`: `mcp>=2.3.0` |
 | `mcp_session` | `wrap_session(recorder, native_session, *, client_id, server_key=None, retention_policy=None)` | `mcp-session`: `mcp>=2.3.0` |
@@ -62,6 +62,65 @@ Trusted OpenAI response objects are projected with their JSON, API-name, exclude
 When the native result is an asynchronous stream, the returned proxy supports native async iteration/context management, response access and close methods. It forwards each native chunk as consumed, without prefetching or draining. The caller remains responsible for consumption and cleanup. Failure, cancellation, early close and incomplete chunks remain distinct terminal observations.
 
 Stream accumulation uses choice/tool indexes and accepts nullable fragments. Two independent pools each retain at most 1,048,576 encoded bytes: whole raw chunk projections, and pending tool ID/name/argument fragments across all keys. There are at most 64 choices and 64 lifetime tool keys; emitted keys still occupy their positions. Emission or unsupported-tool discard releases only its fragment bytes. The first raw chunk that would exceed its pool closes raw retention and makes the aggregate partial, while selection inspection continues on that chunk and later host-consumed chunks without serializing their discarded full projections again. A fully observed tool can still produce a complete decision before its finishing native chunk is returned. Fragment or cardinality overflow keeps the conservative selection stop; actual projection gaps taint pending and future keys without revoking already emitted decisions. Complete aggregate observation requires observed end-of-stream and finished choices without a partial-source condition. Tool decisions require complete exposed names/arguments and the applicable tool finish reason. The combined bound is 2,097,152 retained encoded buffer bytes plus bounded container/object overhead; it does not bound native chunk size, transient projections, assembled payloads, callback time, total capture memory or process RSS.
+
+### Opt-in response usage
+
+The OpenAI factory accepts `record_usage=False`. It must be an exact Boolean; another type raises `ValueError("record_usage must be a boolean")` when constructing the wrapper. With the default `False`, the wrapper omits the normalized `details_json.usage` field on terminal `model.response` events. An ordinarily retained provider response body can still contain native usage fields under the configured content capture and retention policy. This option does not redact the response body. Set it to `True` to explicitly preserve three reported provider counts in `details_json.usage`, independently of response-body retention. The option belongs to the recorder wrapper and is never forwarded to the provider.
+
+For streamed usage, the host must also request and consume the provider's aggregate:
+
+```python
+create = wrap_model(recorder, client.chat.completions.create,
+                    instance_id="agent-model", record_usage=True)
+stream = await create(model=model_name, messages=messages, stream=True,
+                      stream_options={"include_usage": True}, evidence=evidence)
+```
+
+The host still owns turn, stream and recorder cleanup. The wrapper does not inject `stream_options`, drain, prefetch, issue another request or warn when usage is unavailable. An eligible aggregate has explicitly exposed empty `choices` and non-null usage, so unconditional `chunk.choices[0]` is unsafe. Stopping at the content finish marker, or closing before consuming the aggregate, can leave the recorded counts null.
+
+| Recorded key | Explicit native field |
+|---|---|
+| `prompt_tokens` | `usage.prompt_tokens` |
+| `cached_tokens` | `usage.prompt_tokens_details.cached_tokens` |
+| `cache_write_tokens` | `usage.prompt_tokens_details.cache_write_tokens`, when exposed |
+
+Each value is an exact integer in `0..2**63-1`, or null. The adapter checks `model_fields_set` at every native level: an unset SDK default is not a reported zero. Missing, null or invalid counts become null independently; valid siblings and explicit zeros survive. Valid but numerically inconsistent reports remain unchanged. Original counts are detached before normal response projection or retention, so replacement, omission, metadata capture and an independent content-projection failure cannot replace them with retained-body values. Usage extraction does not serialize the whole SDK object or retain it in the snapshot. Ordinary extraction faults remain local, and missing optional usage does not add a capture loss or make content partial. Existing process-control exception boundaries still apply.
+
+With `record_usage=False`, no normalized usage fact is added. With `record_usage=True` and no observed snapshot, the wrapper attaches all three keys with null values. This differs from direct public `usage=None`, which leaves normalized usage absent. For a stream, the last consumed eligible aggregate replaces the entire per-call snapshot, including nulls. Counts are never summed, maximized or merged across aggregates. Other chunks leave the snapshot unchanged; usage on arbitrary content chunks is not treated as a final aggregate. A later consumed aggregate can update usage after body or selection capture has stopped, without reopening either capture path. The existing single terminal attempt attaches the snapshot and releases it in `finally`; native arguments, results, exceptions, cancellation and cleanup keep their existing behavior.
+
+Usage counts remain potentially sensitive metadata even when bodies are omitted. They describe provider reports, not verified bills, exact uncached components, cache causes or monetary savings. This option is specific to the OpenAI factory; the AnyLLM and MCP factory signatures remain unchanged.
+
+### Inspect recorded usage with `fr sql`
+
+Read a finalized recording or a fixed snapshot. Use `fr runs run.sqlite` to find the desired run ID and substitute it for `RUN_ID`. The second parameter, `-1`, starts at the beginning of that run:
+
+```sh
+fr sql "run.sqlite" "
+SELECT sequence, event_id, model_call_id,
+       json_extract(details_json, '$.usage.prompt_tokens') AS prompt_tokens,
+       json_extract(details_json, '$.usage.cached_tokens') AS cached_tokens,
+       json_extract(details_json, '$.usage.cache_write_tokens') AS cache_write_tokens,
+       CASE
+         WHEN json_type(details_json, '$.usage.prompt_tokens') = 'integer'
+          AND json_type(details_json, '$.usage.cached_tokens') = 'integer'
+          AND json_extract(details_json, '$.usage.prompt_tokens') > 0
+          AND json_extract(details_json, '$.usage.cached_tokens') >= 0
+          AND json_extract(details_json, '$.usage.cached_tokens')
+              <= json_extract(details_json, '$.usage.prompt_tokens')
+         THEN 1.0 * json_extract(details_json, '$.usage.cached_tokens')
+              / json_extract(details_json, '$.usage.prompt_tokens')
+       END AS read_fraction
+FROM observed_events
+WHERE run_id = ? AND kind = 'model.response' AND sequence > ?
+ORDER BY sequence
+" --params '["RUN_ID", -1]' --limit 100
+```
+
+This uses the existing inspection envelope. Inspect `ok`, `error`, `cutoffs` and `data.has_more`, then read `data.columns` and `data.rows`. When a successful page has more rows, rerun the same query with the last returned `sequence` as its second parameter. Do not guess a continuation after an error or an empty partial result. Existing access refusals and CLI exit codes still apply.
+
+Rows without usage remain present with NULL count fields. The three columns are ordinary SQLite JSON projections of producer-normalized integers or nulls, not a second sanitizer for damaged recordings. The CASE guards apply only to `read_fraction`: positive prompt count with explicit cached zero gives `0.0`; zero prompt count, unavailable counts or cached greater than prompt gives NULL. A missing write count does not prevent a read fraction. For example, reported prompt 10,000 and cached 8,000 yield `0.8`; the ratio is not monetary savings.
+
+Sequence orders observed response events, not request starts, hidden attempts or requests lacking a response. Distinct events remain distinct even when their model-call IDs match. The query does not infer duplicates, select only a latest terminal or calculate session totals.
 
 ## 4. AnyLLM with Ollama
 

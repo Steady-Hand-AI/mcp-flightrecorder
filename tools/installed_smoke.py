@@ -31,7 +31,7 @@ def main():
     assert any(installed.is_relative_to(Path(p).resolve()) for p in site.getsitepackages())
     assert installed.is_relative_to(Path(sys.prefix).resolve())
     assert not installed.is_relative_to(source)
-    assert mcp_flightrecorder.__version__ == "0.5.16"
+    assert mcp_flightrecorder.__version__ == "0.5.17"
     assert (installed.parent / "schema.sql").read_bytes() == (source / "sql/schema.sql").read_bytes()
     sdks = ("openai", "mcp", "mcp-types", "httpx2")
     if args.profile == "core":
@@ -60,10 +60,10 @@ def main():
         assert result["error"] is None, result
         return result["data"]
 
-    assert run([cli, "--version"], json_output=False) == "mcp-flightrecorder 0.5.16"
+    assert run([cli, "--version"], json_output=False) == "mcp-flightrecorder 0.5.17"
     schema = inspect("schema")
     assert schema["database_schema_version"] == 6
-    assert schema["package_version"] == "0.5.16"
+    assert schema["package_version"] == "0.5.17"
     recording = output / "run.sqlite"
     copy = output / "copy.sqlite"
     created = run([sys.executable, "-I", "-B", str(source / "examples/quickstart.py"), str(recording)], json_output=False)

@@ -7,7 +7,7 @@ import math
 from ._config import boolean, choice, fields, integer, sequence
 from ._types import Bundle, CaptureResult, Identity, Ticket
 from ._values import (
-    MISSING, InvalidInput, arguments_digest, freeze, json_text, text_digest,
+    MISSING, InvalidInput, _validate_keys, arguments_digest, freeze, json_text, text_digest,
     validate_control, validate_pointer,
 )
 
@@ -23,11 +23,12 @@ OBSERVATIONS = {
 
 
 def _normalize_usage(usage):
-    """Detach only the three optional reported counts; discard other values."""
-    normalized = {}
-    for name in ("prompt_tokens", "cached_tokens", "cache_write_tokens"):
-        value = usage.get(name) if type(usage) is dict else None
-        normalized[name] = value if type(value) is int and 0 <= value <= 2**63 - 1 else None
+    """Detach selected counts without invoking unsupported key hooks."""
+    normalized = {"prompt_tokens": None, "cached_tokens": None, "cache_write_tokens": None}
+    if type(usage) is dict:
+        for name, value in usage.items():
+            if type(name) is str and name in normalized:
+                normalized[name] = value if type(value) is int and 0 <= value <= 2**63 - 1 else None
     return normalized
 
 
@@ -203,6 +204,7 @@ class Preparation:
         if type(kind) is not str or kind not in OBSERVATIONS:
             raise InvalidInput("unsupported observation kind")
         if kind == "model.response" and type(facts) is dict:
+            _validate_keys(facts)
             facts = facts.copy()
             usage = facts.pop("usage", None)
             if usage is not None:

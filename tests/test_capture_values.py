@@ -410,6 +410,121 @@ def test_response_usage_none_is_absent_and_unrelated_inputs_remain_strict(tmp_pa
                     msg="Invalid unrelated facts or payloads never become persisted responses.")
 
 
+@pytest.mark.parametrize("case", [
+    "exact-none", "exact-counts", "subclass-usage-none", "subclass-usage-counts",
+    "subclass-state", "colliding-outer", "subclass-prompt", "colliding-prompt", "colliding-cached",
+])
+def test_response_usage_key_boundary_preserves_admission_and_recovery(tmp_path, case):
+    class FactName(str):
+        pass
+
+    hooks = []
+    armed = False
+
+    def touched(name):
+        hooks.append(name)
+        if armed:
+            raise RuntimeError("capture invoked an unsupported key hook")
+
+    class CollidingKey:
+        def __init__(self, target):
+            self.target = target
+
+        def __hash__(self):
+            touched("hash")
+            return hash(self.target)
+
+        def __eq__(self, other):
+            touched("equality")
+            return False
+
+        def forbidden(self, *args, **kwargs):
+            touched("conversion or mapping")
+            raise RuntimeError("unsupported key conversion or mapping")
+
+        __str__ = __repr__ = __int__ = __index__ = forbidden
+        __iter__ = __len__ = __getitem__ = get = keys = items = forbidden
+
+    rejected = case in ("subclass-usage-none", "subclass-usage-counts", "subclass-state", "colliding-outer")
+    expected_usage = None
+    usage = {"prompt_tokens": 10, "cached_tokens": 8, "cache_write_tokens": 0}
+    path = tmp_path / "usage-key-boundary.sqlite"
+    recorder = Recorder(path, capture="content", coverage=COVERAGE)
+    try:
+        with recorder.turn("usage key admission and recovery") as turn:
+            accept(turn.receipt)
+            source = observe(recorder, "model.request", {"messages": []}, messages=[])
+            facts = {"model_call_id": source.model_call_id}
+            if case == "exact-none":
+                facts["usage"] = None
+            elif case == "exact-counts":
+                facts["usage"] = usage
+                expected_usage = {"prompt_tokens": 10, "cached_tokens": 8, "cache_write_tokens": 0}
+            elif case.startswith("subclass-usage"):
+                facts[FactName("usage")] = None if case.endswith("none") else usage
+            elif case == "subclass-state":
+                facts.update(usage=usage)
+                facts[FactName("state")] = "complete"
+            elif case == "colliding-outer":
+                facts[CollidingKey("usage")] = None
+            else:
+                key = (FactName("prompt_tokens") if case == "subclass-prompt" else
+                       CollidingKey("cached_tokens" if case == "colliding-cached" else "prompt_tokens"))
+                # Insert the unsupported key first. The cached collision must permit
+                # equality during construction, then forbid a second lookup at capture.
+                usage = {key: 10, "cached_tokens": 8}
+                facts["usage"] = usage
+                expected_usage = {"prompt_tokens": None, "cached_tokens": 8, "cache_write_tokens": None}
+                if case == "colliding-cached":
+                    assert "equality" in hooks, "fixture must exercise the collision before arming the key"
+            original_facts = [(id(key), id(value)) for key, value in facts.items()]
+            original_usage = [(id(key), id(value)) for key, value in usage.items()]
+            hooks.clear()
+            armed = True
+            response = recorder.observe("model.response", scope=recorder.capture_scope(), payload={}, facts=facts)
+            after_response = recorder.health()
+            subsequent = recorder.observe("model.response", scope=recorder.capture_scope(), payload={},
+                facts={"model_call_id": source.model_call_id, "state": "complete"})
+            after_subsequent = recorder.health()
+            check.equal([(id(key), id(value)) for key, value in facts.items()], original_facts,
+                        msg="capture preserves the caller's original outer keys and values without looking them up")
+            check.equal([(id(key), id(value)) for key, value in usage.items()], original_usage,
+                        msg="capture preserves optional entries, including unsupported key and value identities")
+    finally:
+        closed = recorder.close()
+    assert closed.writer_stopped and closed.portable
+    check.equal(hooks, [], msg="construction is excluded; capture must not call unsupported key hooks")
+    check.equal([(health.state, health.writer_errors) for health in (after_response, after_subsequent)],
+                [("accepting", 0)] * 2, msg="malformed keys must not fail the recorder or its writer")
+    check.equal((subsequent.status, subsequent.reason), ("accepted", None),
+                msg="a valid response immediately after the tested observation remains admissible")
+    if rejected:
+        check.equal((response.status, response.reason, response.event_id, response.model_call_id,
+                     response.decision_id, response.operation_id),
+                    ("rejected", "invalid_input", None, None, None, None),
+                    msg="invalid outer keys are rejected without response/call identities")
+        # Rejection accounting may make this turn partial; it must not become a writer failure.
+    else:
+        check.equal((response.status, response.reason, response.losses), ("accepted", None, ()),
+                    msg="ignored optional keys and valid controls cause no rejection or capture loss")
+        check.equal((closed.run_close_state, recorder.health().dropped_events), ("clean", 0),
+                    msg="optional usage does not create a false partial recording")
+    with closing(sqlite3.connect(path)) as db:
+        expected_responses = ([response] if not rejected else []) + [subsequent]
+        check.equal(db.execute("SELECT event_id,model_call_id,state FROM events "
+                               "WHERE kind='model.response' ORDER BY sequence").fetchall(),
+                    [(receipt.event_id, source.model_call_id, "complete") for receipt in expected_responses],
+                    msg="only admitted responses persist, with the original call identity and complete state")
+        if response.status == "accepted" and not rejected:
+            expected = {"complete": True, "instance_id": None}
+            if expected_usage is not None:
+                expected["usage"] = expected_usage
+            check.equal(event_details(db, response.event_id), expected,
+                        msg="exact selected counts survive; None is absent and nonexact counter keys are ignored")
+            check.equal(db.execute("SELECT capture_state FROM turns").fetchone()[0], "complete",
+                        msg="optional malformed material does not mark response content partial")
+
+
 def test_metadata_omission_preserves_original_comparison_and_clean_capture(tmp_path):
     path = tmp_path / "metadata.sqlite"
     secret = "comparison-secret-unretained"

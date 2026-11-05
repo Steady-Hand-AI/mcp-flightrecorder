@@ -1,6 +1,6 @@
 # MCP Flight Recorder
 
-**Version 0.5.16 · Python 3.11+ · SQLite schema 6**
+**Version 0.5.17 release candidate · Python 3.11+ · SQLite schema 6**
 
 MCP Flight Recorder records what an MCP host actually exposes: submitted model input, model tool choices, host dispatch, MCP operations, and tool results submitted back to the model. It keeps these observations and their explicit relationships in a portable SQLite recording.
 
@@ -10,7 +10,7 @@ An accepted capture receipt means the observation entered the queue. It does not
 
 ## Install
 
-Install version 0.5.16 from [PyPI](https://pypi.org/project/mcp-flightrecorder/0.5.16/). The core has no third-party runtime dependencies.
+Version 0.5.17 is a release candidate; publication is pending. For local review, install the prepared `mcp_flightrecorder-0.5.17-py3-none-any.whl` or use the reviewed source checkout below. The [PyPI](https://pypi.org/project/mcp-flightrecorder/0.5.17/) recipes in this section apply after publication is verified. The core has no third-party runtime dependencies.
 
 Select an available supported GIL-enabled CPython once and use the resulting environment for the commands below. Set `MFR_PYTHON` to choose an interpreter; otherwise the recipe uses `python3`. The preflight prints the actual Python and SQLite versions. [Testing](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/testing.md) distinguishes contributor setup from completed qualification.
 
@@ -27,16 +27,16 @@ print(sys.version, sqlite3.sqlite_version, sys.executable)
 PYTHON
 mfr_env=$(mktemp -d /tmp/mfr-env-XXXXXX)
 "$mfr_python" -m venv "$mfr_env"
-"$mfr_env/bin/python" -m pip install 'mcp-flightrecorder==0.5.16'
+"$mfr_env/bin/python" -m pip install 'mcp-flightrecorder==0.5.17'
 "$mfr_env/bin/fr" --version
 ```
 
 Install an optional SDK adapter only when needed:
 
 ```sh
-"$mfr_env/bin/python" -m pip install 'mcp-flightrecorder[openai-chat]==0.5.16'
-"$mfr_env/bin/python" -m pip install 'mcp-flightrecorder[mcp]==0.5.16'
-"$mfr_env/bin/python" -m pip install 'mcp-flightrecorder[anyllm-ollama]==0.5.16'
+"$mfr_env/bin/python" -m pip install 'mcp-flightrecorder[openai-chat]==0.5.17'
+"$mfr_env/bin/python" -m pip install 'mcp-flightrecorder[mcp]==0.5.17'
+"$mfr_env/bin/python" -m pip install 'mcp-flightrecorder[anyllm-ollama]==0.5.17'
 ```
 
 The MCP 1.23.1 session adapter uses the separate `mcp-session-legacy` extra and a separate environment. Adapter signatures, version constraints and host attachment examples are in [Integrations](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/integrations.md).
@@ -115,11 +115,10 @@ Local recipes accept a supported **GIL-enabled CPython 3.11+**. Record the actua
 
 ### Install from source
 
-For a source checkout, use the interpreter selected by the preflight above and create a separate environment:
+Use a checkout of the reviewed 0.5.17 candidate; public `main` may still contain the previous release until integration. With the interpreter selected by the preflight above, create a separate environment:
 
 ```sh
-git clone https://github.com/Steady-Hand-AI/mcp-flightrecorder.git
-cd mcp-flightrecorder
+cd /absolute/path/to/reviewed-mcp-flightrecorder
 mfr_source_env=$(mktemp -d /tmp/mfr-source-env-XXXXXX)
 "$mfr_python" -m venv "$mfr_source_env"
 "$mfr_source_env/bin/python" -m pip install .
@@ -132,7 +131,7 @@ Follow the complete [Testing](https://github.com/Steady-Hand-AI/mcp-flightrecord
 
 The [CI workflow](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/.github/workflows/ci.yml) is configured for Linux core jobs on CPython 3.11 and 3.14 and a separate CPython 3.14 integration job. It checks the exported source and built distributions against an explicit public inventory, rebuilds from the sdist, and exercises installed artifacts. The workflow uses read-only repository permissions; it does not publish packages. Check the actual [Actions runs](https://github.com/Steady-Hand-AI/mcp-flightrecorder/actions) for observed results. Configuration alone does not establish a passing run.
 
-The manual [release workflow](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/releasing.md) provides validation and staged publication through TestPyPI, PyPI and GitHub. It promotes one reviewed wheel/sdist pair, verifies downloaded bytes and installations between stages, and uses separate registry approval gates. See [release notes](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/release-notes.md) for version 0.5.16.
+The manual [release workflow](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/releasing.md) provides validation and staged publication through TestPyPI, PyPI and GitHub. It promotes one reviewed wheel/sdist pair, verifies downloaded bytes and installations between stages, and uses separate registry approval gates. See [release notes](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/release-notes.md) for the prepared 0.5.17 release candidate.
 
 ## Documentation and source
 
@@ -145,7 +144,7 @@ The manual [release workflow](https://github.com/Steady-Hand-AI/mcp-flightrecord
 | [Integrations](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/integrations.md) | SDK facades, evidence receipts and host attachment recipes |
 | [Testing](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/testing.md) | Reproducible local suites and temporary fixtures |
 | [Releasing](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/releasing.md) | Candidate validation, registry setup and staged publication |
-| [Release notes](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/release-notes.md) | Curated version 0.5.16 notes |
+| [Release notes](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/release-notes.md) | Curated 0.5.17 release-candidate notes |
 | [Changelog](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/CHANGELOG.md) | Version history and unreleased changes |
 | [Repository](https://github.com/Steady-Hand-AI/mcp-flightrecorder) | Source code |
 | [Issues](https://github.com/Steady-Hand-AI/mcp-flightrecorder/issues) | Bug reports and feature requests |

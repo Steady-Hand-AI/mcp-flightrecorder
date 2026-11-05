@@ -1,13 +1,15 @@
-# MCP Flight Recorder 0.5.16
+# MCP Flight Recorder 0.5.17
 
-MCP Flight Recorder captures explicit model, host and MCP observations in portable SQLite recordings. The Python library and `fr` CLI support bounded capture, read-only inspection, evidence relationships and independent snapshots.
+**Release candidate. Publication is pending.**
 
-- The core uses the Python standard library, a bounded queue and one capture-time writer thread.
-- Optional OpenAI Chat, AnyLLM/Ollama and MCP adapters observe supported SDK calls while the host owns clients, routing, retries and stream consumption.
-- Inspection preserves unknown, incomplete and unavailable evidence rather than inferring provenance from equal text, names or timestamps.
-- Package checks validate source and distribution inventories, metadata, license files and the installed schema. CI exercises installed wheels in separate SDK-free and integration environments.
-- The manual release workflow validates one wheel/sdist pair and promotes the same approved bytes through TestPyPI, PyPI and GitHub, with downloaded-byte and installation verification between stages.
+Version 0.5.17 adds opt-in provider usage evidence to the existing model-response recording path:
 
-Version 0.5.16 requires Python 3.11+ and uses SQLite schema 6. It is licensed under Apache-2.0; copyright 2026 Volodymyr Barylyak. An accepted capture receipt is admission to the queue, not a durability guarantee. A portable recording can still contain incomplete capture.
+- Set `record_usage=True` on the OpenAI Chat wrapper to retain reported prompt, cache-read and cache-write counts. Counts remain available when response bodies are replaced, omitted or captured in metadata mode; usage capture is disabled by default.
+- Missing or invalid counts remain null independently, and explicit zeros survive. These are provider reports, not inferred cache hits, verified bills or measured savings.
+- For streaming calls, the last eligible aggregate consumed by the host supplies the counts. The host continues to own request options, stream consumption and cleanup.
+- Inspect response counts with the documented timeline query through the existing `fr sql` command. SQLite schema 6 and inspection format `mfr.inspect/1` remain unchanged.
+- Release publication uses bounded read-only confirmation of registry and GitHub visibility after uploads and publication, retaining exact release identities and downloaded asset-byte checks without repeating mutations.
 
-See the [README](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/README.md) for source installation, supported usage and documentation. These notes describe the version; registry availability is established by the verified published release.
+Version 0.5.17 requires Python 3.11+ and is licensed under Apache-2.0; copyright 2026 Volodymyr Barylyak. An accepted capture receipt is admission to the queue, not a durability guarantee. A portable recording can still contain incomplete capture.
+
+See [Integrations](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/docs/integrations.md#opt-in-response-usage) for the opt-in and SQL recipe, and the [README](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/README.md) for installation and usage. These notes describe the prepared candidate. Availability is established by verified registry and GitHub publication.

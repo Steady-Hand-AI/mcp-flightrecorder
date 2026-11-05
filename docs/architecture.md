@@ -1,6 +1,6 @@
 # Architecture
 
-**Package 0.5.16 · SQLite schema 6 · inspection format `mfr.inspect/1` · updated 4 November 2026**
+**Package 0.5.17 release candidate · SQLite schema 6 · inspection format `mfr.inspect/1` · updated 5 November 2026**
 
 MCP Flight Recorder captures explicit observations at model, host and MCP boundaries. The host owns native work; the recorder owns bounded capture and its recording. The [HTML map](architecture.html) renders the same implemented behavior offline. [Detailed control flows](#detailed-control-flows) contain nine source-linked views, with closure and snapshot drawn separately. This map covers the responsibilities and material branches of all 31 runtime modules, the schema and build seam; it is not a line-by-line call graph. Public details are in [Capture](capture.md), [Inspection](inspection.md) and [Integrations](integrations.md).
 
@@ -251,7 +251,7 @@ The read-only GitHub Actions workflow runs the 19-module SDK-free selection on L
 
 ### Staged publication
 
-The manual `publish.yml` workflow admits main-only `validate-only` or explicit `staged-release` dispatch with a full reviewed commit, version 0.5.16 and planned tag 0.5.16. Staged release additionally requires that bare tag to exist as an annotated tag at the approved commit. A clean source export builds one original wheel/sdist pair, with package guards, strict Twine, installed smoke and an sdist-rebuilt wheel comparison. Both modes store a flat candidate containing the pair, `manifest.json` and `SHA256SUMS`; source/workflow identity, exact main-push CI and artifact hashes remain bound to the run.
+The manual `publish.yml` workflow admits main-only `validate-only` or explicit `staged-release` dispatch with a full reviewed commit, version 0.5.17 and planned tag 0.5.17. Both modes require completed successful main-push CI for that exact commit before candidate preparation. Staged release additionally requires that bare tag to exist as an annotated tag at the approved commit. A clean source export builds one original wheel/sdist pair, with package guards, strict Twine, installed smoke and an sdist-rebuilt wheel comparison. Both modes store a flat candidate containing the pair, `manifest.json` and `SHA256SUMS`; source/workflow identity, exact main-push CI and artifact hashes remain bound to the run.
 
 Validate-only ends after candidate storage. Staged publication promotes the same bytes through the `testpypi`, `pypi` and `github-release` environments. A release reviewer inspects this run's candidate before TestPyPI approval; PyPI follows TestPyPI download/install verification and a second environment approval. GitHub draft/published-state verification follows PyPI download/install verification. Identity is rechecked after waits. Only proven identical existing files permit partial resume; conflicts stop without deleting, replacing or retagging public state. These are configured release paths, not an observed publication claim. [Releasing](releasing.md) contains exact setup and operator steps.
 

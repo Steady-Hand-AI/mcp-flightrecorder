@@ -1,6 +1,6 @@
 # Inspection API and CLI
 
-**Package 0.5.16 · schema 6 · format `mfr.inspect/1`.** One standard-library reader serves Python and the JSON CLI. It exposes retained observations, explicit attribution and uncertainty. It does not score agents, write findings, repair recordings or infer provenance.
+**Package 0.5.17 release candidate · schema 6 · format `mfr.inspect/1`.** One standard-library reader serves Python and the JSON CLI. It exposes retained observations, explicit attribution and uncertainty. It does not score agents, write findings, repair recordings or infer provenance.
 
 ## 1. Public Python surface and limits
 

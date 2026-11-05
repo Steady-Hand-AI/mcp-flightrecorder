@@ -1,17 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.5.17 — release candidate
 
-- Add opt-in OpenAI response usage capture for prompt, cache-read and cache-write counts independently of body retention, with a documented timeline query through the existing `fr sql` command.
+- Add opt-in OpenAI response usage capture for provider-reported prompt, cache-read and cache-write counts independently of body retention, including metadata mode. Preserve unknowns as null and explicit zeros, with a timeline query through the existing `fr sql` command.
+- Confirm registry and GitHub release visibility with bounded read-only retries after uploads and publication, preserving exact identities and downloaded-byte checks without repeating mutations.
+
+## 0.5.16
+
 - Add canonical repository, issue-tracker and documentation links; clarify source installation and public test recipes.
 - Exclude local planning, agent instructions, credentials and generated evidence from source distributions.
 - Make snapshot-path and SQL-formatting tests portable across macOS path aliases and SQLite versions without changing runtime behavior.
-
 - Require Python 3.11+ and preserve host exceptions and scope attribution when turn/dispatch cleanup runs in a foreign context.
 - Separate stream raw-chunk and pending-tool retention into independent 1,048,576-byte pools, preserving complete tool observations after raw-body overflow.
 - Cap query-only SQLite values and encoded rows at 8,388,608 bytes, with explicit native too-big errors and successful formatting NULL preserved.
-
-## 0.5.16
 
 - Replace closure's correlated response lookup with a run-scoped NULL-safe set query, retaining duplicate and unscoped unfinished requests.
 - Reuse one lazy calling-thread identity reader per capture preparation, with fresh autocommit statements and cleanup before admission; preserve the 512-entry committed cache and receipt semantics.

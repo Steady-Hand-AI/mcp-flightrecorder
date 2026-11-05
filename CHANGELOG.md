@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.17 — release candidate
+## 0.5.17
 
 - Add opt-in OpenAI response usage capture for provider-reported prompt, cache-read and cache-write counts independently of body retention, including metadata mode. Preserve unknowns as null and explicit zeros, with a timeline query through the existing `fr sql` command.
 - Confirm registry and GitHub release visibility with bounded read-only retries after uploads and publication, preserving exact identities and downloaded-byte checks without repeating mutations.

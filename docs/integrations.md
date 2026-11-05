@@ -1,6 +1,6 @@
 # SDK and host integrations
 
-**Package 0.5.17 release candidate.** Integrations wrap callables or sessions the host already owns. They observe exposed requests, results and consumed stream chunks; they do not create a client-routing layer, infer provider-ID associations or take over application cleanup.
+**Package 0.5.17.** Integrations wrap callables or sessions the host already owns. They observe exposed requests, results and consumed stream chunks; they do not create a client-routing layer, infer provider-ID associations or take over application cleanup.
 
 The recorder core has no SDK dependency. Import an adapter explicitly after installing the matching extra or test profile. Separate dependency environments are necessary for incompatible MCP versions; [Testing](testing.md) lists the profiles.
 
@@ -65,7 +65,7 @@ Stream accumulation uses choice/tool indexes and accepts nullable fragments. Two
 
 ### Opt-in response usage
 
-The OpenAI factory accepts `record_usage=False`. It must be an exact Boolean; another type raises `ValueError("record_usage must be a boolean")` when constructing the wrapper. Set it to `True` to preserve three explicitly exposed provider counts in the existing terminal `model.response` event's `details_json.usage`, independently of response-body retention. The option belongs to the recorder wrapper and is never forwarded to the provider.
+The OpenAI factory accepts `record_usage=False`. It must be an exact Boolean; another type raises `ValueError("record_usage must be a boolean")` when constructing the wrapper. With the default `False`, the wrapper omits the normalized `details_json.usage` field on terminal `model.response` events. An ordinarily retained provider response body can still contain native usage fields under the configured content capture and retention policy. This option does not redact the response body. Set it to `True` to explicitly preserve three reported provider counts in `details_json.usage`, independently of response-body retention. The option belongs to the recorder wrapper and is never forwarded to the provider.
 
 For streamed usage, the host must also request and consume the provider's aggregate:
 
@@ -86,7 +86,7 @@ The host still owns turn, stream and recorder cleanup. The wrapper does not inje
 
 Each value is an exact integer in `0..2**63-1`, or null. The adapter checks `model_fields_set` at every native level: an unset SDK default is not a reported zero. Missing, null or invalid counts become null independently; valid siblings and explicit zeros survive. Valid but numerically inconsistent reports remain unchanged. Original counts are detached before normal response projection or retention, so replacement, omission, metadata capture and an independent content-projection failure cannot replace them with retained-body values. Usage extraction does not serialize the whole SDK object or retain it in the snapshot. Ordinary extraction faults remain local, and missing optional usage does not add a capture loss or make content partial. Existing process-control exception boundaries still apply.
 
-Disabled capture adds no usage fact. Enabled capture without an observed snapshot attaches all three keys with null values. This differs from direct public `usage=None`, which leaves usage absent. For a stream, the last consumed eligible aggregate replaces the entire per-call snapshot, including nulls. Counts are never summed, maximized or merged across aggregates. Other chunks leave the snapshot unchanged; usage on arbitrary content chunks is not treated as a final aggregate. A later consumed aggregate can update usage after body or selection capture has stopped, without reopening either capture path. The existing single terminal attempt attaches the snapshot and releases it in `finally`; native arguments, results, exceptions, cancellation and cleanup keep their existing behavior.
+With `record_usage=False`, no normalized usage fact is added. With `record_usage=True` and no observed snapshot, the wrapper attaches all three keys with null values. This differs from direct public `usage=None`, which leaves normalized usage absent. For a stream, the last consumed eligible aggregate replaces the entire per-call snapshot, including nulls. Counts are never summed, maximized or merged across aggregates. Other chunks leave the snapshot unchanged; usage on arbitrary content chunks is not treated as a final aggregate. A later consumed aggregate can update usage after body or selection capture has stopped, without reopening either capture path. The existing single terminal attempt attaches the snapshot and releases it in `finally`; native arguments, results, exceptions, cancellation and cleanup keep their existing behavior.
 
 Usage counts remain potentially sensitive metadata even when bodies are omitted. They describe provider reports, not verified bills, exact uncached components, cache causes or monetary savings. This option is specific to the OpenAI factory; the AnyLLM and MCP factory signatures remain unchanged.
 

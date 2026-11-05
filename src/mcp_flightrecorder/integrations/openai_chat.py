@@ -23,9 +23,13 @@ __all__ = ["ModelEvidence", "ModelDecision", "wrap_model"]
 def wrap_model(recorder, native_create, *, instance_id, retention_policy=None, record_usage=False):
     """Decorate one bound native method; invocation itself schedules no work.
 
-    ``record_usage=True`` preserves explicitly reported prompt, cache-read and
-    cache-write counts independently of response bodies. Unknown counts are
-    null. The host must request streaming usage and consume its aggregate::
+    ``record_usage=False`` omits normalized ``details_json.usage`` on terminal
+    ``model.response`` events. Ordinary body capture and retention can still
+    preserve native usage fields; this option does not redact response bodies.
+    ``record_usage=True`` explicitly preserves reported prompt, cache-read and
+    cache-write counts in those normalized details independently of body
+    retention. Unknown counts are null. The host must request streaming usage
+    and consume its aggregate::
 
         create = wrap_model(recorder, client.chat.completions.create,
                             instance_id="agent-model", record_usage=True)

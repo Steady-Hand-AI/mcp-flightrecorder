@@ -1,6 +1,6 @@
 # Releasing
 
-**Release candidate version and tag: `0.5.17` · Python 3.11+ · SQLite schema 6.**
+**Version and tag `0.5.17` · Python 3.11+ · SQLite schema 6.**
 
 The manual [publish workflow](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/.github/workflows/publish.yml) prepares one wheel/sdist pair and can promote that pair through TestPyPI, PyPI and GitHub. Source installation remains documented in the [README](../README.md). The existence of this workflow or a candidate artifact does not establish that a registry release has occurred.
 
@@ -68,7 +68,7 @@ The registry account owner completes account-side setup in their normal browser.
 
 ## Optional validation and staged publication
 
-These commands are operator recipes for the prepared release candidate, not a report of an executed release. Before either dispatch, integrate the approved commit through the normal repository process and verify successful main-push CI for the resulting full SHA. Replace the placeholder with that reviewed commit on `main` and verify the workflow inputs. `validate-only` is optional; it cannot bypass main-push CI for a local or branch candidate:
+Before either dispatch, integrate the approved commit through the normal repository process and verify successful main-push CI for the resulting full SHA. Replace the placeholder with that reviewed commit on `main` and verify the workflow inputs. `validate-only` is optional; it cannot bypass main-push CI for a local or branch candidate:
 
 ```sh
 release_commit='<FULL_40_CHARACTER_REVIEWED_COMMIT>'

@@ -1,6 +1,6 @@
 # Development and testing
 
-**Package 0.5.17 release candidate.** Tests exercise an installed wheel and generate mutable recordings under temporary directories. Independent scenario expectations live in ordinary pytest tests.
+**Package 0.5.17.** Tests exercise an installed wheel and generate mutable recordings under temporary directories. Independent scenario expectations live in ordinary pytest tests.
 
 ## 1. Qualify the SDK-free core
 

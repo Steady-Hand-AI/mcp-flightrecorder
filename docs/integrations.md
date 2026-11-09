@@ -4,6 +4,8 @@
 
 The recorder core has no SDK dependency. Import an adapter explicitly after installing the matching extra or test profile. Separate dependency environments are necessary for incompatible MCP versions; [Testing](testing.md) lists the profiles.
 
+For a runnable end-to-end example, see [Follow a model → tool → model roundtrip](tool_roundtrip.md). It uses genuine OpenAI and MCP SDKs with local deterministic peers, explicit selected-result bindings and prepared text, followed by the existing CLI investigation flow.
+
 ## 1. Public adapters and dependency boundaries
 
 | Module under `mcp_flightrecorder.integrations` | Entry point | Package extra / minimum exercised SDK baseline |

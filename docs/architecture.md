@@ -1,6 +1,6 @@
 # Architecture
 
-**Package 0.5.17 · SQLite schema 6 · inspection format `mfr.inspect/1` · updated 5 November 2026**
+**Package 0.5.17 · SQLite schema 6 · inspection format `mfr.inspect/1` · updated 9 November 2026**
 
 MCP Flight Recorder captures explicit observations at model, host and MCP boundaries. The host owns native work; the recorder owns bounded capture and its recording. The [HTML map](architecture.html) renders the same implemented behavior offline. [Detailed control flows](#detailed-control-flows) contain nine source-linked views, with closure and snapshot drawn separately. This map covers the responsibilities and material branches of all 31 runtime modules, the schema and build seam; it is not a line-by-line call graph. Public details are in [Capture](capture.md), [Inspection](inspection.md) and [Integrations](integrations.md).
 
@@ -247,7 +247,7 @@ The source tree contains current library modules, short end-user examples, test-
 
 A committed tree is exported into a pristine directory and checked against `tools/public_files.txt`. A separate build copy produces the wheel and sdist; `tools/check_package.py` validates their actual members, metadata, license files and schema against that source. Temporary negative controls exercise refusals without entering the repository. Fresh virtual environments install the wheel normally, and smoke checks verify the import origin before using the CLI and public API outside the source tree. A fresh sdist extraction is rebuilt and installed to check source completeness.
 
-The read-only GitHub Actions workflow runs the 19-module SDK-free selection on Linux CPython 3.11 and 3.14, plus the separate ten-module main integration selection on CPython 3.14. Each suite has its own environment and four workers. The core 3.11 job also rebuilds and installs the sdist. These are configured checks, not a claim of observed hosted success; the workflow does not publish artifacts or packages. [Testing](testing.md#4-source-package-hygiene) documents the commands and limits.
+The read-only GitHub Actions workflow runs the 19-module SDK-free selection on Linux CPython 3.11 and 3.14, plus the separate eleven-module main integration selection on CPython 3.14. Each suite has its own environment and four workers. The core 3.11 job also rebuilds and installs the sdist. These are configured checks, not a claim of observed hosted success; the workflow does not publish artifacts or packages. [Testing](testing.md#4-source-package-hygiene) documents the commands and limits.
 
 ### Staged publication
 
@@ -288,6 +288,12 @@ The stream accumulator has two independent **1,048,576-byte** pools for encoded 
 The host drives every read and cleanup. EOF is complete only with finished choices and no partial-source condition; native error/cancellation and early close retain their own states. Early close forwards native cleanup and records the consumed aggregate as partial, error or cancelled according to the cleanup outcome, without draining. Abandoned streams receive no automatic cleanup. Ordinary terminal observation is guarded once; policy process-control interruption has the limits documented in §6.
 
 Retention is selected separately for each request, decision and response/consumed aggregate. Redacting a decision does not redact its other representation in the response or stream aggregate. Default None or unavailable `MISSING` performs no callback. A configured callback gets detached values; its returned mapping is detached and validated. Ordinary callback/validation failures, including callback-raised cancellation, select fixed omission plus one bounded loss. Other process-control exceptions propagate. Metadata capture overrides body retention. Full supported signatures remain in [Integrations](integrations.md).
+
+### Complete roundtrip example
+
+The source-shipped [`tool_roundtrip.py`](../examples/tool_roundtrip.py) demonstrates two nonstreaming model calls around one selected MCP tool call, using genuine SDKs with deterministic local peers. One explicit MCP discovery supplies the catalog for native result validation and is counted separately. The host selects from the native response, prepares `Tool result: 42` from the native tool text `42` once, and submits that same string in the next request. Per-invocation evidence, `decision=`, explicit answer annotations, `host.tool_result` sources and request insertions connect the selected result to prepared and submitted material. Unavailable selected capture stays unresolved; receipts never control native execution.
+
+The recorder is constructed inside the already established async worker and closed in `finally`. Each process must construct its own recorder after worker startup and choose a fresh path; inherited recorder use and multithreaded fork are not supported by this example. The [walkthrough](tool_roundtrip.md) compares capture on/off and follows `fr turns --text-mismatch true` through the overview and both model-call details. Intentional preparation leaves the original literal mismatch visible. The existing completeness, health, admission, durability and bounded-inspection contracts still apply.
 
 ### Optional OpenAI response usage
 

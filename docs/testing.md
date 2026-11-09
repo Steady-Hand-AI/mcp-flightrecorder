@@ -90,7 +90,7 @@ Snapshot checks require the copied main database to be independently readable, p
 
 ## 2. SDK-specific main tests and optional compatibility environments
 
-The **ten-module integration selection** runs in a separate fresh environment created with the same selected interpreter. It comprises four adapter/fixture modules and six SDK-backed inspection modules. Install the same wheel first, then `requirements/test.txt` together with `requirements/integration.txt` (direct dependencies, resolved by pip):
+The **eleven-module integration selection** runs in a separate fresh environment created with the same selected interpreter. It comprises four adapter/fixture modules, the complete tool-roundtrip example tests, and six SDK-backed inspection modules. Install the same wheel first, then `requirements/test.txt` together with `requirements/integration.txt` (direct dependencies, resolved by pip):
 
 ```sh
 "$mfr_python" -m venv "$work_dir/integration-env"
@@ -100,6 +100,7 @@ The **ten-module integration selection** runs in a separate fresh environment cr
 env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOLOAD -u PYTEST_ADDOPTS PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir" \
     "$work_dir/integration-env/bin/python" -I -B -m pytest -n 4 -p no:cacheprovider \
     tests/test_integration_fixture.py tests/test_integration_history.py \
+    tests/test_tool_roundtrip.py \
     tests/test_mcp_client.py tests/test_openai_chat.py \
     tests/test_inspection_checks.py tests/test_inspection_commands.py \
     tests/test_inspection_content.py tests/test_inspection_inputs.py \
@@ -145,6 +146,8 @@ Run these fixture cases through pytest:
 PYTHONDONTWRITEBYTECODE=1 "$work_dir/core-env/bin/python" -m pytest -p no:cacheprovider tests/test_fixture.py
 PYTHONDONTWRITEBYTECODE=1 "$work_dir/integration-env/bin/python" -m pytest -p no:cacheprovider tests/test_integration_fixture.py
 ```
+
+[`test_tool_roundtrip.py`](../tests/test_tool_roundtrip.py) runs the source-shipped [complete example](tool_roundtrip.md) from outside the source directory against the installed package. Independent transport and tool observations specify its two model requests and single selected tool call. Capture-off, healthy capture and a controlled rejected terminal observation must preserve the same host work. The tests check explicit answer/source/placement evidence, the documented CLI investigation, destination refusal, and host-owned exceptions/cancellation. They do not require a live service or add SDK imports to the core quickstart.
 
 The installed inspection contract is exercised by `test_inspection_commands.py` for API/CLI envelopes and parity; navigation tests for schema/discovery/paging/associations; checks for integrity; slice tests for graph ancestry/caps; content/query tests for payload/SQL/errors; and snapshot tests for portable copying and path/permission failures.
 
@@ -221,7 +224,7 @@ mkdir -p "$work_dir/results/tmp"
 "$work_dir/current-env/bin/python" -I -B -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); s.close()'
 ```
 
-The following selection runs nineteen core modules and seven SDK modules from the exported source directory, sequentially with four workers. It focuses on retention and shared lifecycle behavior; use §2 for the full ten-module main integration suite. Both commands use normal assertions and the installed pytest/xdist/pytest-check plugins' ordinary autoload. Unset `PYTEST_DISABLE_PLUGIN_AUTOLOAD`; do not also load pytest-check under a second plugin name. Clear `PYTEST_ADDOPTS` so inherited selection, plugin or worker options cannot alter the selection.
+The following selection runs nineteen core modules and seven SDK modules from the exported source directory, sequentially with four workers. It focuses on retention and shared lifecycle behavior; use §2 for the full eleven-module main integration suite. Both commands use normal assertions and the installed pytest/xdist/pytest-check plugins' ordinary autoload. Unset `PYTEST_DISABLE_PLUGIN_AUTOLOAD`; do not also load pytest-check under a second plugin name. Clear `PYTEST_ADDOPTS` so inherited selection, plugin or worker options cannot alter the selection.
 
 ```sh
 env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOLOAD -u PYTEST_ADDOPTS PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir/results/tmp" \

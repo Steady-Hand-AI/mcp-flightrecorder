@@ -172,7 +172,7 @@ class PackageGuardTests(unittest.TestCase):
             record = next(n for n in archive.namelist() if n.endswith("/RECORD"))
             data = archive.read(metadata)
             for original, changed, reason in (
-                (b"Version: 0.5.17", b"Version: 0.0.0", "metadata Version"),
+                (b"Version: 0.5.18", b"Version: 0.0.0", "metadata Version"),
                 (b"https://github.com/Steady-Hand-AI/mcp-flightrecorder/issues", b"https://example.invalid/issues", "Project-URL"),
                 (b"Author: Volodymyr Barylyak", b"Author: Somebody Else", "metadata Author"),
                 (b"Requires-Python: >=3.11", b"Requires-Dist: unexpected-package>=1\nRequires-Python: >=3.11", "dependency metadata"),
@@ -263,7 +263,7 @@ class PackageGuardTests(unittest.TestCase):
             replacements = {entry.name: archive.extractfile(entry).read().partition(b"\n\n")[0] + b"\n\n" + readme
                             for entry in archive if entry.isfile() and entry.name.endswith("/PKG-INFO")}
         self.assertEqual(len(replacements), 2)
-        replacements["mcp_flightrecorder-0.5.17/README.md"] = readme
+        replacements["mcp_flightrecorder-0.5.18/README.md"] = readme
         sdist = self.sdist_copy(replacements=replacements)
         self.assertEqual(guard.check(source, wheel, sdist)["status"], "PASS")
 
@@ -285,7 +285,7 @@ class PackageGuardTests(unittest.TestCase):
         wheel = self.wheel_copy(additions=[(entry, b"outside")])
         with self.assertRaisesRegex(guard.Rejected, "non-regular wheel"):
             guard.check(self.source, wheel)
-        entry = tarfile.TarInfo("mcp_flightrecorder-0.5.17/link")
+        entry = tarfile.TarInfo("mcp_flightrecorder-0.5.18/link")
         entry.type = tarfile.SYMTYPE
         entry.linkname = "../../outside"
         sdist = self.sdist_copy(addition=(entry, None))
@@ -294,8 +294,8 @@ class PackageGuardTests(unittest.TestCase):
 
     def test_sdist_path_and_private_member_are_rejected(self):
         for name, reason in (("../outside", "unsafe member path"),
-                             ("mcp_flightrecorder-0.5.17/AGENTS.md", "forbidden member"),
-                             ("mcp_flightrecorder-0.5.17/extra.py", "sdist inventory differs")):
+                             ("mcp_flightrecorder-0.5.18/AGENTS.md", "forbidden member"),
+                             ("mcp_flightrecorder-0.5.18/extra.py", "sdist inventory differs")):
             with self.subTest(name=name):
                 entry = tarfile.TarInfo(name)
                 entry.size = 10
@@ -304,10 +304,10 @@ class PackageGuardTests(unittest.TestCase):
                     guard.check(self.source, sdist=sdist)
 
     def test_sdist_source_bytes_and_manifest_are_checked(self):
-        sdist = self.sdist_copy(replacement=("mcp_flightrecorder-0.5.17/NOTICE", b"changed\n"))
+        sdist = self.sdist_copy(replacement=("mcp_flightrecorder-0.5.18/NOTICE", b"changed\n"))
         with self.assertRaisesRegex(guard.Rejected, "sdist content differs"):
             guard.check(self.source, sdist=sdist)
-        sdist = self.sdist_copy(replacement=("mcp_flightrecorder-0.5.17/src/mcp_flightrecorder.egg-info/SOURCES.txt", b"README.md\n"))
+        sdist = self.sdist_copy(replacement=("mcp_flightrecorder-0.5.18/src/mcp_flightrecorder.egg-info/SOURCES.txt", b"README.md\n"))
         with self.assertRaisesRegex(guard.Rejected, "sdist build manifest"):
             guard.check(self.source, sdist=sdist)
 

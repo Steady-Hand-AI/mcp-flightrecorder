@@ -1,6 +1,6 @@
 # Capture API
 
-**Package 0.5.17 · schema 6.** This is the SDK-free producer contract. See [Architecture](architecture.md) for storage ownership and [Integrations](integrations.md) for native SDK adapters.
+**Package 0.5.18 · schema 6.** This is the SDK-free producer contract. See [Architecture](architecture.md) for storage ownership and [Integrations](integrations.md) for native SDK adapters.
 
 ## 1. Construction and values
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.18
 
 - Add a deterministic SDK-backed model → selected MCP tool → prepared answer example with capture-on/off comparison and a guided `fr turns` / `fr explain` investigation. Preserve the SDK-free quickstart and existing capture/inspection contracts.
 

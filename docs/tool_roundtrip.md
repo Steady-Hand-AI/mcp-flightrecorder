@@ -4,18 +4,14 @@
 
 The host selects `answer` with `{}` from the first native model response, executes it, constructs the string `Tool result: 42` once, and submits that same value in the second request's tool message. The second native response says `The answer is 42.`. Capture observes this flow through the existing adapters and explicit host annotations.
 
-## Install and run outside the source tree
+## Install the matching package and source
 
-Use a source checkout or extracted source distribution that contains this example and a wheel built from the same source. The example is source-shipped, not a wheel entry point. The [contributor build recipe](testing.md#1-qualify-the-sdk-free-core) exports committed source and builds the wheel in a disposable copy. This example is an unreleased addition to that source.
+The example is shipped at `examples/tool_roundtrip.py` in the [0.5.18 source tag](https://github.com/Steady-Hand-AI/mcp-flightrecorder/tree/0.5.18) and source distribution. It is not a wheel entry point. Install the matching package into a fresh environment, then run the source example from outside its source directory. No source directory needs to be added to the package import path.
 
-Replace the two absolute paths below with your source directory and matching wheel. Select a supported GIL-enabled CPython 3.11+ using `MFR_PYTHON` if `python3` is not your intended interpreter.
+Select a supported GIL-enabled CPython 3.11+ using `MFR_PYTHON` if `python3` is not your intended interpreter. The commands below share one shell session.
 
 ```sh
 set -eu
-mfr_source=/absolute/path/to/source-containing-this-example
-mfr_wheel=/absolute/path/to/mcp_flightrecorder-0.5.17-py3-none-any.whl
-test -f "$mfr_source/examples/tool_roundtrip.py"
-test -f "$mfr_wheel"
 mfr_python=$(command -v "${MFR_PYTHON:-python3}") || exit 1
 "$mfr_python" -I -B - <<'PYTHON'
 import sqlite3, sys
@@ -28,8 +24,39 @@ print(sys.version, sqlite3.sqlite_version, sys.executable)
 PYTHON
 mfr_work=$(mktemp -d /tmp/mfr-roundtrip-XXXXXX)
 "$mfr_python" -m venv "$mfr_work/env"
+```
+
+Choose one of the following installation routes, then continue to **Run the example**.
+
+### Published package and tagged source
+
+Install the pinned package and its SDK extras from PyPI, then obtain the example from the matching source tag.
+
+```sh
+"$mfr_work/env/bin/python" -m pip install 'mcp-flightrecorder[openai-chat,mcp]==0.5.18' \
+    'httpx2>=2.15.1' 'mcp-types>=2.3.0'
+git clone --depth 1 --branch 0.5.18 https://github.com/Steady-Hand-AI/mcp-flightrecorder.git "$mfr_work/source"
+mfr_source="$mfr_work/source"
+```
+
+Alternatively, extract `mcp_flightrecorder-0.5.18.tar.gz` from the [PyPI release files](https://pypi.org/project/mcp-flightrecorder/0.5.18/#files) and set `mfr_source` to the absolute path of its `mcp_flightrecorder-0.5.18` directory. The example has the same `examples/tool_roundtrip.py` location in that source distribution.
+
+### Contributor or candidate wheel
+
+For local candidate validation, use the [contributor build recipe](testing.md#1-qualify-the-sdk-free-core) to export committed source and build its matching wheel. Replace the two absolute paths below with those outputs. Use this route instead of the published-package installation above.
+
+```sh
+mfr_source=/absolute/path/to/matching-source
+mfr_wheel=/absolute/path/to/mcp_flightrecorder-0.5.18-py3-none-any.whl
+test -f "$mfr_wheel"
 "$mfr_work/env/bin/python" -m pip install "${mfr_wheel}[openai-chat,mcp]" \
     'httpx2>=2.15.1' 'mcp-types>=2.3.0'
+```
+
+## Run the example
+
+```sh
+test -f "$mfr_source/examples/tool_roundtrip.py"
 "$mfr_work/env/bin/python" -m pip check
 cd "$mfr_work"
 "$mfr_work/env/bin/python" -I -B - <<'PYTHON'

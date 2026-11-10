@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from typing import Literal
 
 
 SCHEMA = {"type": "object", "properties": {"text": {"type": "string"}},
@@ -22,9 +23,18 @@ async def modern(options):
     from mcp.server.stdio import stdio_server
     from mcp.shared.exceptions import MCPError
 
+    class DeferredResult(types.Result):
+        result_type: Literal["peer_deferred"] = "peer_deferred"
+        status: Literal["working"] = "working"
+        handle: str
+        content: list[types.TextContent]
+        tools: list[types.Tool]
+
     async def listing(context, params):
-        return types.ListToolsResult(tools=[types.Tool(name=name, input_schema=SCHEMA)
-                                           for name in ("echo", "refuse", "protocol", "continue", "wait")])
+        names = ("echo", "refuse", "protocol", "continue", "wait")
+        if options.claimed_extension:
+            names += ("defer",)
+        return types.ListToolsResult(tools=[types.Tool(name=name, input_schema=SCHEMA) for name in names])
 
     async def calling(context, params):
         append(options.ledger, {"kind": "invocation", "id": context.request_id,
@@ -35,6 +45,10 @@ async def modern(options):
                                     for key, value in params.input_responses.items()}})
         if params.name == "protocol":
             raise MCPError(-32001, "peer protocol refusal", {"native": "café 🌱"})
+        if params.name == "defer" and options.claimed_extension:
+            return DeferredResult(handle="opaque handle café 🌱",
+                content=[types.TextContent(type="text", text="Extension progress is not a core tool answer.")],
+                tools=[types.Tool(name="opaque-extension-tool", input_schema=SCHEMA)])
         if params.name == "continue" and params.request_state is None:
             return types.InputRequiredResult(request_state=STATE)
         if params.name == "continue":
@@ -146,6 +160,7 @@ if __name__ == "__main__":
     parser.add_argument("--pid", type=Path, required=True)
     parser.add_argument("--legacy", action="store_true")
     parser.add_argument("--mrtr-extension", action="store_true")
+    parser.add_argument("--claimed-extension", action="store_true")
     options = parser.parse_args()
     options.pid.write_text(str(os.getpid()))
     asyncio.run(legacy(options) if options.legacy else modern(options))

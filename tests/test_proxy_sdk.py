@@ -6,21 +6,47 @@ import os
 from pathlib import Path
 import sqlite3
 import sys
+from typing import Literal
 
 from mcp import Client
+from mcp.client.extension import ClientExtension, ResultClaim
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.shared.exceptions import MCPError
-from mcp_types import CallToolRequest, CallToolRequestParams, InputRequiredResult
+from mcp_types import CallToolRequest, CallToolRequestParams, CallToolResult, InputRequiredResult, Result, TextContent
 import pytest
 from pytest_check import check
 
 import mcp_flightrecorder
+from mcp_flightrecorder import inspect
 
 
 PEER = Path(__file__).parent / "producers/proxy_sdk_peer.py"
 BOOTSTRAP = Path(__file__).parent / "producers/proxy_peer.py"
 FR = str(Path(sys.executable).with_name("fr"))
 STATE = "opaque continuation café 🌱 /?=not-a-proxy-token"
+
+
+class DeferredResult(Result):
+    result_type: Literal["peer_deferred"] = "peer_deferred"
+    status: Literal["working"] = "working"
+    handle: str
+    content: list[dict]
+    tools: list[dict]
+
+
+class DeferredExtension(ClientExtension):
+    identifier = "org.example/peer-deferred"
+
+    def __init__(self, observed):
+        self.observed = observed
+
+    def claims(self):
+        async def resolve(value, context):
+            assert isinstance(value, DeferredResult) and value.status == "working"
+            assert context.tool_name == "defer"
+            self.observed.append(value.model_dump(mode="json", by_alias=True, exclude_unset=True))
+            return CallToolResult(content=[TextContent(type="text", text="consumer resolved " + value.handle)])
+        return [ResultClaim(result_type="peer_deferred", model=DeferredResult, resolve=resolve)]
 
 
 def ledger(directory):
@@ -56,6 +82,8 @@ async def exercise(directory, mode, *, fault=None, scenario="ordinary"):
              "--pid", str(directory / "child.pid")]
     if scenario == "continuation-extension":
         child.append("--mrtr-extension")
+    if scenario == "claimed-extension":
+        child.append("--claimed-extension")
     proxy_args = ["proxy"]
     if mode != "forward":
         proxy_args += ["--record", str(directory / "recording.sqlite"), "--capture", mode]
@@ -72,8 +100,11 @@ async def exercise(directory, mode, *, fault=None, scenario="ordinary"):
         "cwd": str(directory), "installed_origin": mcp_flightrecorder.__file__}, indent=2) + "\n")
     params = StdioServerParameters(command=command, args=args, cwd=directory)
     outcomes = []
+    claimed = []
+    extensions = [DeferredExtension(claimed)] if scenario == "claimed-extension" else []
     with (directory / "stderr.log").open("w") as errors:
-        async with Client(stdio_client(params, errlog=errors), read_timeout_seconds=10, cache=None) as native:
+        async with Client(stdio_client(params, errlog=errors), read_timeout_seconds=10,
+                          cache=None, extensions=extensions) as native:
             catalog = await native.list_tools()
             outcomes.append(catalog.model_dump(mode="json", by_alias=True, exclude_unset=True))
             if scenario == "ordinary":
@@ -84,6 +115,12 @@ async def exercise(directory, mode, *, fault=None, scenario="ordinary"):
                         outcomes.append({"error": error.error.model_dump(mode="json", by_alias=True, exclude_unset=True)})
                     else:
                         outcomes.append(result.model_dump(mode="json", by_alias=True, exclude_unset=True))
+            elif scenario == "claimed-extension":
+                for name in ("defer", "echo"):
+                    result = await native.call_tool(name, {"text": "same input café 🌱"})
+                    outcomes.append(result.model_dump(mode="json", by_alias=True, exclude_unset=True))
+                assert len(claimed) == 1, "The actual native extension resolver must run exactly once."
+                outcomes.append({"claimed": claimed})
             elif scenario in ("continuation", "continuation-extension"):
                 if scenario == "continuation-extension":
                     # Exercise the native typed request API: MCP2's broad
@@ -197,6 +234,55 @@ def test_modern_input_required_and_explicit_continuation_are_separate_rpcs(tmp_p
     check.equal([o["terminal_complete"] for o in operations], [0, 1],
                 msg="Input-required is partial evidence; only the later independent tool RPC completes.")
     check.equal(json.loads(operations[0]["result"])["requestState"], STATE)
+
+
+@pytest.mark.parametrize("mode", ["metadata", "content"])
+def test_native_claimed_extension_is_partial_without_core_text_projection(tmp_path, run_sdk_async, mode):
+    async def scenario():
+        direct = await exercise(tmp_path / "direct", "direct", scenario="claimed-extension")
+        proxied = await exercise(tmp_path / "proxy", mode, scenario="claimed-extension")
+        check.equal(proxied, direct, msg="Native extension resolver outputs and later ordinary results remain identical.")
+        check.equal(proxied[1]["content"][0]["text"], "consumer resolved opaque handle café 🌱")
+    run_sdk_async(scenario(), timeout=30)
+    assert_peer_equal(tmp_path / "direct", tmp_path / "proxy")
+    observed = ledger(tmp_path / "proxy")
+    calls = [r for r in observed if r["kind"] == "invocation"]
+    check.equal([r["name"] for r in calls], ["defer", "echo"])
+    check.equal([r["method"] for r in observed if r["kind"] == "request"],
+                ["server/discover", "tools/list", "tools/call", "tools/call"])
+    assert len(calls) == 2
+    check.not_equal(calls[0]["id"], calls[1]["id"])
+    opaque = next(r["result"] for r in observed if r["kind"] == "result" and r["id"] == calls[0]["id"])
+    assert opaque["resultType"] == "peer_deferred" and opaque["status"] == "working"
+    assert opaque["content"] and opaque["tools"], "The native extension must overlap both core result shapes."
+
+    path = tmp_path / "proxy/recording.sqlite"
+    runs = inspect.runs(path)
+    assert runs["ok"] and not runs["cutoffs"] and len(runs["data"]["items"]) == 1
+    run_id = runs["data"]["items"][0]["run_id"]
+    page = inspect.query(path, """SELECT o.name,o.status,e.details_json,e.payload_ref
+        FROM operations o JOIN events e ON e.event_id=o.end_event_id AND e.run_id=o.run_id
+        WHERE o.run_id=? AND o.method='tools/call' ORDER BY e.sequence""", [run_id], limit=10)
+    assert page["ok"] and not page["cutoffs"] and not page["data"]["has_more"]
+    records = [dict(zip(page["data"]["columns"], row)) for row in page["data"]["rows"]]
+    assert [r["name"] for r in records] == ["defer", "echo"]
+    payload = inspect.payload(path, run_id, records[0]["payload_ref"], max_bytes=4096)
+    report = inspect.check(path, run_id, expect=["mcp"])
+    (tmp_path / "public-inspection.json").write_text(json.dumps(
+        {"runs": runs, "query": page, "payload": payload, "check": report}, ensure_ascii=False, indent=2) + "\n")
+    assert report["ok"]
+    deferred, ordinary = [json.loads(r["details_json"]) for r in records]
+    check.is_false(deferred["complete"], msg="An extension resolver's working result is not a complete core tool result.")
+    check.is_none(deferred["result_text_digest"]["value"], msg="Overlapping extension content cannot acquire a core text digest.")
+    check.equal(deferred["result_text_digest"].get("reason"), "text_paths_unavailable")
+    check.is_true(ordinary["complete"], msg="A later ordinary core response still completes independently.")
+    check.is_not_none(ordinary["result_text_digest"]["value"])
+    if mode == "content":
+        assert payload["ok"] and payload["data"]["next_offset"] is None and not payload["cutoffs"]
+        check.equal(json.loads(payload["data"]["text"]), opaque, msg="Explicit content retains the opaque native body unchanged.")
+    else:
+        check.is_false(payload["ok"])
+        check.equal(payload["error"]["code"], "payload_omitted")
 
 
 @pytest.mark.parametrize("fault", ["start-rejected", "first-rejected", "capacity", "writer-failed", "init-failed"])

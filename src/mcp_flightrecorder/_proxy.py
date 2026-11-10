@@ -245,9 +245,11 @@ class _Observer:
                 status = "ok"
                 if type(body) is not dict:
                     body, complete = MISSING, False
-                elif body.get("resultType") == "input_required" or "inputRequests" in body:
-                    # Intermediate modern MRTR follows the existing adapter's
-                    # partial terminal meaning; the client owns its next RPC.
+                elif ("resultType" in body and body["resultType"] != "complete") or "inputRequests" in body:
+                    # Only absent/complete discriminators permit core shape
+                    # projection. Input-required, foreign and malformed tags
+                    # retain their opaque body as partial evidence, without
+                    # core text paths; native clients own their interpretation.
                     complete = False
                 elif method == "tools/call":
                     status = "tool_error" if body.get("isError") is True else "ok"

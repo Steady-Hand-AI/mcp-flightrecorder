@@ -569,3 +569,80 @@ def test_input_required_discriminator_stays_partial_with_unknown_content_extensi
     assert json.loads(stored[0]["result_body"]) == reply["result"]
     terminal = rows(path, "SELECT details_json FROM events WHERE kind='mcp.response'")
     assert len(terminal) == 1 and json.loads(terminal[0]["details_json"])["complete"] is False
+
+
+@pytest.mark.parametrize("method", ["tools/list", "tools/call"])
+@pytest.mark.parametrize("capture", ["metadata", "content"])
+@pytest.mark.parametrize("discriminator,present,complete", [
+    pytest.param("peer_deferred", True, False, id="foreign"),
+    pytest.param(None, True, False, id="null"),
+    pytest.param(False, True, False, id="boolean"),
+    pytest.param(7, True, False, id="integer"),
+    pytest.param([], True, False, id="array"),
+    pytest.param({}, True, False, id="object"),
+    pytest.param("complete", True, True, id="complete"),
+    pytest.param(None, False, True, id="legacy-absent"),
+    pytest.param("input_required", True, False, id="input-required"),
+])
+def test_result_discriminator_controls_projection_without_changing_wire_or_next_rpc(
+        tmp_path, method, capture, discriminator, present, complete):
+    first = (request(11, "matrix-first") if method == "tools/call" else
+             {"jsonrpc": "2.0", "id": 11, "method": method, "params": {}})
+    # Both known field names deliberately overlap an opaque extension. They
+    # cannot turn a foreign/malformed discriminator into a core final result.
+    body = {"content": [{"type": "text", "text": "opaque overlapping text"}],
+            "tools": [], "status": "working", "requestState": {"handle": "native-only"}}
+    if present:
+        body["resultType"] = discriminator
+    first_data = wire(first)
+    first_response = wire({"jsonrpc": "2.0", "id": 11, "result": body})
+    next_data = wire(request("later", "matrix-later", {"text": "next"}))
+    next_response = wire(answer("later", "ordinary next result"))
+    tail = tmp_path / "next-response.bin"
+    tail.write_bytes(next_response)
+    options = ("--input-bytes", len(first_data), "--tail-input-bytes", len(next_data),
+               "--tail-response", tail)
+    direct, direct_input, direct_pid = fixture(tmp_path / "direct", first_response, *options)
+    native = run(direct, first_data + next_data, tmp_path)
+    child, observed, pid = fixture(tmp_path / "proxy", first_response, *options)
+    path = tmp_path / "capture.sqlite"
+    argv = ([FR, "proxy", "--record", str(path), "--", *child] if capture == "metadata"
+            else proxy(child, path))
+    with launched(argv, tmp_path) as process:
+        process.stdin.write(first_data); process.stdin.flush()
+        assert read_bytes(process.stdout, len(first_response)) == first_response
+        stdout, stderr = process.communicate(next_data, timeout=12)
+    assert process.returncode == native.returncode == 0 and gone(pid) and gone(direct_pid)
+    assert first_response + stdout == native.stdout == first_response + next_response
+    assert observed.read_bytes() == direct_input.read_bytes() == first_data + next_data
+    assert len(stderr) < 8192
+
+    stored = operations(path)
+    assert len(stored) == 2 and all(row["status"] == "ok" for row in stored)
+    first_operation = next(row for row in stored if row["name"] != "matrix-later")
+    next_operation = next(row for row in stored if row["name"] == "matrix-later")
+    assert first_operation["method"] == method and next_operation["method"] == "tools/call"
+    terminals = {row["event_id"]: row for row in rows(path, """SELECT e.event_id,e.details_json,
+        a.body_text,a.stored_bytes,a.omitted_reason FROM events e
+        JOIN artifacts a ON a.artifact_id=e.payload_ref WHERE e.kind='mcp.response'""")}
+    assert len(terminals) == 2
+    first_terminal = terminals[first_operation["end_event_id"]]
+    next_terminal = terminals[next_operation["end_event_id"]]
+    if capture == "metadata":
+        assert all(row["body_text"] is None and row["stored_bytes"] == 0 and row["omitted_reason"]
+                   for row in terminals.values())
+    else:
+        assert json.loads(first_terminal["body_text"]) == body
+        assert json.loads(next_terminal["body_text"]) == answer("later", "ordinary next result")["result"]
+        assert all(row["stored_bytes"] > 0 and row["omitted_reason"] is None for row in terminals.values())
+    later_details = json.loads(next_terminal["details_json"])
+    assert later_details["complete"] is True
+    assert len(later_details["result_text_digest"]["value"]) == 64
+    details = json.loads(first_terminal["details_json"])
+    digest = details["result_text_digest"]
+    if complete and method == "tools/call":
+        assert len(digest["value"]) == 64 and digest["basis"] == "observed_original"
+    else:
+        assert digest["value"] is None and digest["reason"] == "text_paths_unavailable"
+    assert details["complete"] is complete
+    assert_portable(path)

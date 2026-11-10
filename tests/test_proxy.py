@@ -336,13 +336,27 @@ def test_oversized_frame_and_later_frame_forward_completely_with_bounded_loss(tm
     large = "🌱" * 50000
     data = wire(request(1, arguments={"large": large if direction == "client" else "small"})) + wire(request(2))
     response = wire(answer(1, large if direction == "server" else "small")) + wire(answer(2))
-    child, observed, pid = fixture(tmp_path, response, "--read-size", 127, "--write-size", 113)
+    warmup, ready = wire(request(0, "frame-ready")), wire(answer(0, "ready"))
+    tail = tmp_path / "large-response.bin"
+    tail.write_bytes(response)
+    child, observed, pid = fixture(tmp_path, ready, "--input-bytes", len(warmup),
+                                  "--tail-input-bytes", len(data), "--tail-response", tail)
     path = tmp_path / "capture.sqlite"
-    result = run(proxy(child, path), data, tmp_path)
-    assert result.returncode == 0 and result.stdout == response and observed.read_bytes() == data and gone(pid)
-    assert b"frame_limit" in result.stderr and b"correlation_disabled" in result.stderr
-    assert len(result.stderr) < 8192 and large[:100].encode() not in result.stderr
-    stored = operations(path)
+    with launched(proxy(child, path), tmp_path) as process:
+        process.stdin.write(warmup); process.stdin.flush()
+        assert read_bytes(process.stdout, len(ready)) == ready
+        # Establish observer readiness through a real completed operation before
+        # the large-frame phase. Normal 16 KiB fixture chunks isolate the frame
+        # bound; separate cases exercise tiny fragments and observer queue loss.
+        wait_for(lambda: has_operation(path) and any(row["name"] == "frame-ready" and row["status"] == "ok"
+                 for row in operations(path)), "warmup operation committed before the oversized frame")
+        stdout, stderr = process.communicate(data, timeout=12)
+    assert process.returncode == 0 and stdout == response and observed.read_bytes() == warmup + data and gone(pid)
+    assert b"frame_limit" in stderr and b"correlation_disabled" in stderr
+    assert len(stderr) < 8192 and large[:100].encode() not in stderr
+    all_stored = operations(path)
+    assert len([row for row in all_stored if row["name"] == "frame-ready" and row["status"] == "ok"]) == 1
+    stored = [row for row in all_stored if row["name"] != "frame-ready"]
     assert len(stored) == (0 if direction == "client" else 2)
     assert all(row["status"] == "incomplete" for row in stored)
 

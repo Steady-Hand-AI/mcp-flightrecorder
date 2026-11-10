@@ -48,11 +48,13 @@ docs/integrations.md
 docs/release-notes.md
 docs/releasing.md
 docs/testing.md
+docs/tool_roundtrip.md
 examples/fast_agent.py
 examples/fastmcp_session.py
 examples/mcp_agent_session.py
 examples/pydantic_openai.py
 examples/quickstart.py
+examples/tool_roundtrip.py
 pyproject.toml
 requirements/fast-agent.txt
 requirements/fastmcp.txt
@@ -142,6 +144,7 @@ tests/test_openai_chat.py
 tests/test_scale_regressions.py
 tests/test_scope_validation.py
 tests/test_shutdown.py
+tests/test_tool_roundtrip.py
 tools/check_package.py
 tools/ci.sh
 tools/installed_smoke.py

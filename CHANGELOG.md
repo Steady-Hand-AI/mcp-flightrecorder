@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.18
+
+- Add a deterministic SDK-backed model → selected MCP tool → prepared answer example with capture-on/off comparison and a guided `fr turns` / `fr explain` investigation. Preserve the SDK-free quickstart and existing capture/inspection contracts.
+
 ## 0.5.17
 
 - Add opt-in OpenAI response usage capture for provider-reported prompt, cache-read and cache-write counts independently of body retention, including metadata mode. Preserve unknowns as null and explicit zeros, with a timeline query through the existing `fr sql` command.

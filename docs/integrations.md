@@ -1,8 +1,10 @@
 # SDK and host integrations
 
-**Package 0.5.17.** Integrations wrap callables or sessions the host already owns. They observe exposed requests, results and consumed stream chunks; they do not create a client-routing layer, infer provider-ID associations or take over application cleanup.
+**Package 0.5.18.** Integrations wrap callables or sessions the host already owns. They observe exposed requests, results and consumed stream chunks; they do not create a client-routing layer, infer provider-ID associations or take over application cleanup.
 
 The recorder core has no SDK dependency. Import an adapter explicitly after installing the matching extra or test profile. Separate dependency environments are necessary for incompatible MCP versions; [Testing](testing.md) lists the profiles.
+
+For a runnable end-to-end example, see [Follow a model → tool → model roundtrip](tool_roundtrip.md). It uses genuine OpenAI and MCP SDKs with local deterministic peers, explicit selected-result bindings and prepared text, followed by the existing CLI investigation flow.
 
 ## 1. Public adapters and dependency boundaries
 

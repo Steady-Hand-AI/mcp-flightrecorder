@@ -1,6 +1,6 @@
 # Development and testing
 
-**Package 0.5.17.** Tests exercise an installed wheel and generate mutable recordings under temporary directories. Independent scenario expectations live in ordinary pytest tests.
+**Package 0.5.18.** Tests exercise an installed wheel and generate mutable recordings under temporary directories. Independent scenario expectations live in ordinary pytest tests.
 
 ## 1. Qualify the SDK-free core
 
@@ -36,11 +36,11 @@ chmod 0711 "$work_dir"  # traversal only on this newly created owned ancestor
     "$work_dir/build-env/bin/python" -I -B -m pip install build 'setuptools>=77.0.3' packaging
     "$work_dir/build-env/bin/python" -I -B -m build --no-isolation --wheel --sdist --outdir "$work_dir/dist" "$work_dir/build-source"
     "$mfr_python" -I -B "$work_dir/source/tools/check_package.py" --source "$work_dir/source" \
-        --wheel "$work_dir/dist/mcp_flightrecorder-0.5.17-py3-none-any.whl" \
-        --sdist "$work_dir/dist/mcp_flightrecorder-0.5.17.tar.gz" \
+        --wheel "$work_dir/dist/mcp_flightrecorder-0.5.18-py3-none-any.whl" \
+        --sdist "$work_dir/dist/mcp_flightrecorder-0.5.18.tar.gz" \
         --report "$work_dir/package-check.json"
     "$mfr_python" -m venv "$work_dir/core-env"
-    "$work_dir/core-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.17-py3-none-any.whl"
+    "$work_dir/core-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.18-py3-none-any.whl"
     "$work_dir/core-env/bin/python" -m pip install -r "$work_dir/source/requirements/test.txt"
 )
 "$work_dir/core-env/bin/python" -m pip check
@@ -90,16 +90,17 @@ Snapshot checks require the copied main database to be independently readable, p
 
 ## 2. SDK-specific main tests and optional compatibility environments
 
-The **ten-module integration selection** runs in a separate fresh environment created with the same selected interpreter. It comprises four adapter/fixture modules and six SDK-backed inspection modules. Install the same wheel first, then `requirements/test.txt` together with `requirements/integration.txt` (direct dependencies, resolved by pip):
+The **eleven-module integration selection** runs in a separate fresh environment created with the same selected interpreter. It comprises four adapter/fixture modules, the complete tool-roundtrip example tests, and six SDK-backed inspection modules. Install the same wheel first, then `requirements/test.txt` together with `requirements/integration.txt` (direct dependencies, resolved by pip):
 
 ```sh
 "$mfr_python" -m venv "$work_dir/integration-env"
-"$work_dir/integration-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.17-py3-none-any.whl"
+"$work_dir/integration-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.18-py3-none-any.whl"
 "$work_dir/integration-env/bin/python" -m pip install -r requirements/test.txt -r requirements/integration.txt
 "$work_dir/integration-env/bin/python" -m pip check
 env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOLOAD -u PYTEST_ADDOPTS PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir" \
     "$work_dir/integration-env/bin/python" -I -B -m pytest -n 4 -p no:cacheprovider \
     tests/test_integration_fixture.py tests/test_integration_history.py \
+    tests/test_tool_roundtrip.py \
     tests/test_mcp_client.py tests/test_openai_chat.py \
     tests/test_inspection_checks.py tests/test_inspection_commands.py \
     tests/test_inspection_content.py tests/test_inspection_inputs.py \
@@ -120,7 +121,7 @@ For example, run legacy alone with a new environment:
 
 ```sh
 "$mfr_python" -m venv "$work_dir/legacy-env"
-"$work_dir/legacy-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.17-py3-none-any.whl"
+"$work_dir/legacy-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.18-py3-none-any.whl"
 "$work_dir/legacy-env/bin/python" -m pip install -r requirements/legacy.txt
 "$work_dir/legacy-env/bin/python" -m pip check
 PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir" \
@@ -145,6 +146,8 @@ Run these fixture cases through pytest:
 PYTHONDONTWRITEBYTECODE=1 "$work_dir/core-env/bin/python" -m pytest -p no:cacheprovider tests/test_fixture.py
 PYTHONDONTWRITEBYTECODE=1 "$work_dir/integration-env/bin/python" -m pytest -p no:cacheprovider tests/test_integration_fixture.py
 ```
+
+[`test_tool_roundtrip.py`](../tests/test_tool_roundtrip.py) runs the source-shipped [complete example](tool_roundtrip.md) from outside the source directory against the installed package. Independent transport and tool observations specify its two model requests and single selected tool call. Capture-off, healthy capture and a controlled rejected terminal observation must preserve the same host work. The tests check explicit answer/source/placement evidence, the documented CLI investigation, destination refusal, and host-owned exceptions/cancellation. They do not require a live service or add SDK imports to the core quickstart.
 
 The installed inspection contract is exercised by `test_inspection_commands.py` for API/CLI envelopes and parity; navigation tests for schema/discovery/paging/associations; checks for integrity; slice tests for graph ancestry/caps; content/query tests for payload/SQL/errors; and snapshot tests for portable copying and path/permission failures.
 
@@ -175,8 +178,8 @@ The command in §1 checks the pristine export and actual distributions. [`tools/
 
 ```sh
 MFR_GUARD_SOURCE="$work_dir/source" \
-MFR_GUARD_WHEEL="$work_dir/dist/mcp_flightrecorder-0.5.17-py3-none-any.whl" \
-MFR_GUARD_SDIST="$work_dir/dist/mcp_flightrecorder-0.5.17.tar.gz" \
+MFR_GUARD_WHEEL="$work_dir/dist/mcp_flightrecorder-0.5.18-py3-none-any.whl" \
+MFR_GUARD_SDIST="$work_dir/dist/mcp_flightrecorder-0.5.18.tar.gz" \
     "$mfr_python" -I -B tools/test_package_guard.py
 ```
 
@@ -213,15 +216,15 @@ After the fresh external build and core setup in §1, create the one current SDK
 ```sh
 "$mfr_python" -I -B -m venv "$work_dir/current-env"
 "$work_dir/current-env/bin/python" -I -B -m pip install -r requirements/test.txt -r requirements/integration.txt 'any-llm-sdk[ollama]>=1.29.0' 'ollama>=0.6.3' 'httpx>=0.28.1'
-"$work_dir/core-env/bin/python" -I -B -m pip install --force-reinstall --no-deps "$work_dir/dist/mcp_flightrecorder-0.5.17-py3-none-any.whl"
-"$work_dir/current-env/bin/python" -I -B -m pip install --force-reinstall --no-deps "$work_dir/dist/mcp_flightrecorder-0.5.17-py3-none-any.whl"
+"$work_dir/core-env/bin/python" -I -B -m pip install --force-reinstall --no-deps "$work_dir/dist/mcp_flightrecorder-0.5.18-py3-none-any.whl"
+"$work_dir/current-env/bin/python" -I -B -m pip install --force-reinstall --no-deps "$work_dir/dist/mcp_flightrecorder-0.5.18-py3-none-any.whl"
 "$work_dir/core-env/bin/python" -I -B -m pip check
 "$work_dir/current-env/bin/python" -I -B -m pip check
 mkdir -p "$work_dir/results/tmp"
 "$work_dir/current-env/bin/python" -I -B -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); s.close()'
 ```
 
-The following selection runs nineteen core modules and seven SDK modules from the exported source directory, sequentially with four workers. It focuses on retention and shared lifecycle behavior; use §2 for the full ten-module main integration suite. Both commands use normal assertions and the installed pytest/xdist/pytest-check plugins' ordinary autoload. Unset `PYTEST_DISABLE_PLUGIN_AUTOLOAD`; do not also load pytest-check under a second plugin name. Clear `PYTEST_ADDOPTS` so inherited selection, plugin or worker options cannot alter the selection.
+The following selection runs nineteen core modules and seven SDK modules from the exported source directory, sequentially with four workers. It focuses on retention and shared lifecycle behavior; use §2 for the full eleven-module main integration suite. Both commands use normal assertions and the installed pytest/xdist/pytest-check plugins' ordinary autoload. Unset `PYTEST_DISABLE_PLUGIN_AUTOLOAD`; do not also load pytest-check under a second plugin name. Clear `PYTEST_ADDOPTS` so inherited selection, plugin or worker options cannot alter the selection.
 
 ```sh
 env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOLOAD -u PYTEST_ADDOPTS PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir/results/tmp" \

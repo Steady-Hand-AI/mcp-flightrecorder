@@ -14,7 +14,7 @@ import pytest
 
 from mcp_flightrecorder import Recorder
 from mcp_flightrecorder._types import CaptureResult
-from mcp_flightrecorder.easy import AgentRecorder
+from mcp_flightrecorder.easy import AgentRecorder, IntegrationError
 
 
 def tool(label):
@@ -514,3 +514,166 @@ def test_deferred_model_from_closed_turn_does_not_borrow_new_turn(tmp_path, run_
     assert not [row for row in events if row["kind"].startswith("model.")]
     with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
         assert db.execute("SELECT count(*) FROM turns").fetchone()[0] == 2
+
+
+async def native_selection_host(path, strict, *, capture="content", selected_indices=(0, 0),
+                                completion=COMPLETION, selected_position=0, expected_error=None):
+    """Native peers own results; side-channel spies verify exact return identity."""
+    from types import SimpleNamespace
+    observed = {"requests": [], "tools": []}
+    model_values, tool_values = [], []
+
+    async def provider(request):
+        observed["requests"].append(request.content)
+        return httpx2.Response(200, json=completion)
+
+    async def listing(context, params):
+        return mcp_types.ListToolsResult(tools=[mcp_types.Tool(
+            name="echo", input_schema={"type": "object", "properties": {"text": {"type": "string"}},
+                                       "required": ["text"]})])
+
+    async def calling(context, params):
+        observed["tools"].append({"name": params.name, "arguments": dict(params.arguments)})
+        return mcp_types.CallToolResult(content=[mcp_types.TextContent(type="text", text=params.arguments["text"])])
+
+    with AgentRecorder(path, strict=strict, capture=capture) as recorder:
+        conv = recorder.conversation("native-selection")
+        server = Server("native-selection", on_list_tools=listing, on_call_tool=calling)
+        async with AsyncOpenAI(api_key="fixture-only", base_url="https://fixture.invalid/v1", max_retries=0,
+                http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(provider), trust_env=False)) as model:
+            async with Client(server) as native:
+                native_create, native_tool = model.chat.completions.create, native.call_tool
+
+                @wraps(native_create)
+                async def create(**kwargs):
+                    value = await native_create(**kwargs)
+                    model_values.append(value)
+                    return value
+
+                async def call_tool(*args, **kwargs):
+                    value = await native_tool(*args, **kwargs)
+                    tool_values.append(value)
+                    return value
+
+                tools = recorder.mcp(SimpleNamespace(list_tools=native.list_tools, call_tool=call_tool))
+                with conv.turn("Echo alpha"):
+                    payload = {"model": "fixture-model", "messages": [{"role": "user", "content": "Echo alpha"}]}
+                    with conv.model_call(payload, create=create) as call:
+                        response = await call.create()
+                    assert response is model_values[0], "Recording must return the exact genuine SDK response."
+                    native_choice = response.choices[0].message.tool_calls[selected_position]
+                    arguments = json.loads(native_choice.function.arguments)
+                    if expected_error:
+                        with pytest.raises(IntegrationError, match=expected_error):
+                            call.choice(native_choice.function.name, arguments,
+                                        choice_index=selected_indices[0], tool_index=selected_indices[1])
+                        return observed, recorder.diagnostics
+                    selected = call.choice(native_choice.function.name, arguments,
+                                           choice_index=selected_indices[0], tool_index=selected_indices[1])
+                    with selected.run() as attempt:
+                        value = await tools.call_tool(native_choice.function.name, arguments)
+                    assert value is tool_values[0], "Recording must return the exact genuine MCP result."
+                    message = {"role": "tool", "content": value.content[0].text}
+                    assert attempt.answer(message) is message
+                    observed["answer"] = message["content"]
+                    payload["messages"].extend([
+                        response.choices[0].message.to_dict(mode="json", use_api_names=True, exclude_unset=True),
+                        message])
+                    with conv.model_call(payload, create=create) as followup:
+                        assert await followup.create() is model_values[1]
+                diagnostics = recorder.diagnostics
+    return observed, diagnostics
+
+
+@pytest.mark.parametrize("enabled", [False, True], ids=["disabled", "enabled"])
+@pytest.mark.parametrize("strict", [False, True], ids=["ordinary", "strict"])
+def test_native_selection_preserves_work_with_and_without_capture(tmp_path, run_sdk_async, enabled, strict):
+    baseline, _ = run_sdk_async(native_selection_host(None, False))
+    path = tmp_path / "selection.sqlite" if enabled else None
+    observed, diagnostics = run_sdk_async(native_selection_host(path, strict))
+    assert observed == baseline
+    assert len(observed["requests"]) == 2
+    assert observed["tools"] == [{"name": "echo", "arguments": {"text": "alpha"}}]
+    assert observed["answer"] == "alpha"
+    assert not any(note["reason"] == "choice_unavailable" for note in diagnostics), (
+        "No capture is not evidence of a bad native selection.")
+    assert sorted(item.name for item in tmp_path.iterdir()) == (["selection.sqlite"] if enabled else [])
+    if enabled:
+        events, _ = persisted(path)
+        assert len([event for event in events if event["kind"] == "mcp.response"]) == 1
+
+
+@pytest.mark.parametrize("strict", [False, True], ids=["ordinary", "strict"])
+@pytest.mark.parametrize("gap", ["projection", "decision_limit"])
+def test_native_selection_with_missing_capture_stays_unknown(tmp_path, run_sdk_async, monkeypatch, strict, gap):
+    options = {}
+    if gap == "decision_limit":
+        completion = {**COMPLETION, "choices": [{"index": 0, "finish_reason": "tool_calls",
+            "message": {"role": "assistant", "content": None,
+                        "tool_calls": [tool(str(index)) for index in range(65)]}}]}
+        options = {"completion": completion, "selected_position": 64, "selected_indices": (0, 64)}
+    baseline, _ = run_sdk_async(native_selection_host(None, False, **options))
+    if gap == "projection":
+        from mcp_flightrecorder.integrations import _model_capture
+        def unavailable(*args, **kwargs):
+            raise ValueError("capture projection is unavailable")
+        monkeypatch.setattr(_model_capture, "project_model", unavailable)
+    path = tmp_path / "capture-gap.sqlite"
+    observed, diagnostics = run_sdk_async(native_selection_host(path, strict, **options))
+    assert observed == baseline
+    assert len(observed["requests"]) == 2 and len(observed["tools"]) == 1
+    assert any(note["reason"] == "capture_unavailable" for note in diagnostics)
+    assert not any(note["reason"] == "choice_unavailable" for note in diagnostics)
+    events, links = persisted(path)
+    request = [event for event in events if event["kind"] == "model.request"][-1]
+    assert request["details"]["unresolved_answers"] == [
+        {"pointer": "/messages/2/content", "reason": "capture_unavailable"}]
+    assert not [link for link in links if link["relation"] == "answers"]
+
+
+@pytest.mark.parametrize("capture", ["content", "metadata"])
+@pytest.mark.parametrize("strict", [False, True], ids=["ordinary", "strict"])
+def test_complete_native_evidence_retains_invalid_position_feedback(tmp_path, run_sdk_async, capture, strict):
+    observed, diagnostics = run_sdk_async(native_selection_host(
+        tmp_path / "bad-position.sqlite", strict, capture=capture, selected_indices=(9, 0),
+        expected_error="choice_unavailable" if strict else None))
+    assert any(note["reason"] == "choice_unavailable" for note in diagnostics)
+    assert len(observed["requests"]) == (1 if strict else 2)
+    assert len(observed["tools"]) == (0 if strict else 1)
+
+
+@pytest.mark.parametrize("indices", [(-1, 0), (True, 0), (None, 0), (0, "0")])
+def test_invalid_index_shape_is_strict_misuse_even_without_capture(tmp_path, run_sdk_async, indices):
+    observed, diagnostics = run_sdk_async(native_selection_host(
+        None, True, selected_indices=indices, expected_error="choice_unavailable"))
+    assert len(observed["requests"]) == 1 and not observed["tools"]
+    assert any("nonnegative integer" in note["hint"] for note in diagnostics)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_partial_native_stream_cannot_disprove_a_host_selection(tmp_path, run_sdk_async):
+    async def host():
+        frames = Frames()
+        async def provider(request):
+            return httpx2.Response(200, headers={"content-type": "text/event-stream"}, stream=frames)
+        with AgentRecorder(tmp_path / "partial-selection.sqlite", strict=True) as recorder:
+            conv = recorder.conversation("partial-selection")
+            async with AsyncOpenAI(api_key="fixture-only", base_url="https://fixture.invalid/v1", max_retries=0,
+                    http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(provider), trust_env=False)) as model:
+                with conv.turn("Read only the first chunk"):
+                    with conv.model_call({"model": "fixture-model", "messages": [], "stream": True},
+                                         create=model.chat.completions.create) as call:
+                        stream = await call.create()
+                        try:
+                            chunk = await stream.__anext__()
+                            assert chunk.choices[0].delta.content == "one"
+                        finally:
+                            await stream.close()
+                    # Partial capture cannot establish whether this position exists.
+                    selected = call.choice("local", {}, choice_index=0, tool_index=0)
+                    native = {"host": "selection"}
+                    with selected.run(local=True) as attempt:
+                        assert attempt.call(lambda: native) is native
+                    assert not any(note["reason"] == "choice_unavailable" for note in recorder.diagnostics)
+        assert (frames.reads, frames.closes) == (1, 1)
+    run_sdk_async(host())

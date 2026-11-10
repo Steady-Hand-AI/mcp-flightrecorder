@@ -495,12 +495,21 @@ class _Model:
         """Declare the host-selected executable decision; never parse model text."""
         receipt = None
         if self.native is not None:
-            matches = [] if self.evidence is None else [item for item in self.evidence.decisions
+            valid_indices = all(type(index) is int and index >= 0
+                                for index in (choice_index, tool_index))
+            if not valid_indices:
+                self.conv.owner._note("choice_unavailable", "Supply nonnegative integer choice_index and tool_index from the native response.", misuse=True)
+            matches = [] if self.evidence is None or not valid_indices else [item for item in self.evidence.decisions
                 if item.choice_index == choice_index and item.tool_index == tool_index]
             if len(matches) == 1:
                 receipt = matches[0].receipt
-            else:
+            elif valid_indices and self.evidence is not None and _accepted(self.evidence.response) and (
+                    not self.evidence.losses and set(self.evidence.response.losses) <= {"body_omitted"}):
+                # Only a complete observed selection can disprove this position.
+                # Disabled, partial or lost capture is not an execution gate.
                 self.conv.owner._note("choice_unavailable", "Supply the actual choice_index and tool_index exposed by the native response.", misuse=True)
+            elif valid_indices and self.conv.owner._recorder is not None:
+                self.conv.owner._note("capture_unavailable", "Native choice capture is unavailable or incomplete; preserve host selection and inspect capture health.")
         else:
             payload = {"arguments": arguments}
             if raw is not None:

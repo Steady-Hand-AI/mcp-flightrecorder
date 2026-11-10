@@ -50,6 +50,7 @@ class _IdentityReadScope:
         return self.recorder._lookup(category, identity, fallback=self._read)
 
     def _read(self, category, identity):
+        self.recorder._check_process()
         if self.connection is None:
             self.connection = _storage.connect(
                 self.recorder._path, readonly=True,
@@ -58,6 +59,8 @@ class _IdentityReadScope:
         return self.recorder._lookup_connection(self.connection, category, identity)
 
     def __exit__(self, error_type, error, traceback):
+        if not self.recorder._in_creator_process():
+            return False
         connection, self.connection = self.connection, None
         if connection is not None:
             try:
@@ -91,6 +94,10 @@ class _ScopeContext:
 
     def __enter__(self):
         rec = self.recorder
+        if not rec._in_creator_process():
+            self.receipt = CaptureResult("rejected", "wrong_process")
+            self.scope = rec._foreign_scope()
+            return self
         previous = rec.capture_scope()
         if self.kind == "turn":
             self.receipt = rec._enter_turn(**self.arguments)
@@ -107,6 +114,9 @@ class _ScopeContext:
 
     def __exit__(self, error_type, error, traceback):
         rec = self.recorder
+        if not rec._in_creator_process():
+            self.exit_receipt = CaptureResult("rejected", "wrong_process")
+            return False
         try:
             if self.kind == "turn":
                 if self.receipt.status == "accepted":
@@ -135,6 +145,7 @@ class Recorder:
     close/finalize results for storage readiness and run health for capture loss.
     """
     def __init__(self, path, *, capture, coverage, comparisons=True, environment=None, limits=None):
+        self._creator_pid = os.getpid()
         self._coverage, self._environment, self._limits = constructor_config(
             capture, coverage, comparisons, environment, limits)
         try:
@@ -164,6 +175,7 @@ class Recorder:
         self._run_close_state, self._portable, self._final_reason = "open", False, None
         self._shutdown_deadline = None
         self._ready, self._init_error = threading.Event(), None
+        self._init_cleanup = None
         self._retry_lock, self._retry_thread = threading.Lock(), None
         self._scope = ContextVar("mcp_flightrecorder_scope_" + self._run_id, default=None)
         self._artifacts = Artifacts(self._run_id, self._key, capture, comparisons)
@@ -179,7 +191,13 @@ class Recorder:
                 raise self._init_error
             emit(_logger, logging.ERROR, "recorder_initialization_failed run_id=%s reason=storage_error",
                  self._run_id)
-            raise RecorderError("Unable to initialize the recording") from self._init_error
+            if self._init_cleanup == "removed":
+                detail = "failed initialization files were removed"
+            elif self._init_cleanup == "retained":
+                detail = "initialization files were retained; inspect them and choose a fresh path"
+            else:
+                detail = "no initialization files were removed; correct the storage error and choose a fresh path"
+            raise RecorderError("Unable to initialize the recording; " + detail) from self._init_error
         emit(_logger, logging.INFO, "recorder_started run_id=%s capture=%s comparisons=%s",
              self._run_id, capture, comparisons)
 
@@ -203,6 +221,17 @@ class Recorder:
     def _initialization_failed(self, error):
         self._init_error, self._state = error, "failed"
 
+    def _in_creator_process(self):
+        # Never acquire an inherited lock or invoke a logging handler to reject use.
+        return os.getpid() == self._creator_pid
+
+    def _check_process(self):
+        if not self._in_creator_process():
+            raise CaptureRejected("wrong_process")
+
+    def _foreign_scope(self):
+        return CaptureScope(self._run_id, None, None, True, b"")
+
     def _scope_seal(self, turn_id, dispatch_event_id, disabled):
         return hmac.digest(self._key, encode([self._run_id, turn_id, dispatch_event_id, disabled]), "sha256")
 
@@ -219,6 +248,8 @@ class Recorder:
         return frame
 
     def capture_scope(self):
+        if not self._in_creator_process():
+            return self._foreign_scope()
         frame = self._current_scope_frame()
         return self._issue_scope() if frame is None else frame.scope
 
@@ -253,6 +284,8 @@ class Recorder:
 
     def finish_operation(self, ticket, *, status, result=MISSING, resolution="unknown",
                          input_rounds=None, error=None, text_paths=None, complete=True, retention=None):
+        if not self._in_creator_process():
+            return CaptureResult("rejected", "wrong_process")
         def prepare(preparation):
             self._validate_ticket(ticket)
             return preparation.finish(ticket, status=status, result=result, resolution=resolution,
@@ -298,6 +331,8 @@ class Recorder:
         return "writer_failed" if self._state == "failed" else (self._stop_reason or "closed")
 
     def _capture(self, prepare, *, scope=_NO_SCOPE, is_event=True, turn_id=None, turn_update=False):
+        if not self._in_creator_process():
+            return CaptureResult("rejected", "wrong_process")
         if type(scope) is CaptureScope and scope.run_id == self._run_id:
             turn_id = scope.turn_id
         try:
@@ -318,6 +353,8 @@ class Recorder:
         except (ValueError, TypeError, OverflowError, RecursionError):
             result = self._reject("invalid_input", turn_id, is_event, turn_update)
         except Exception:
+            if not self._in_creator_process():
+                return CaptureResult("rejected", "wrong_process")
             with self._condition:
                 self._state, self._stop_reason = "failed", "writer_failed"
                 self._condition.notify_all()
@@ -328,6 +365,8 @@ class Recorder:
 
     def _log_capture_result(self, result):
         """Claim each fixed loss category once; run handlers outside the lock."""
+        if not self._in_creator_process():
+            return
         reason = result.reason or ("capacity" if "capacity" in result.losses else None)
         # Fatal transitions have their own error record; policy omissions are normal.
         if reason is None or reason in ("writer_failed", "prerequisite_lost"):
@@ -343,6 +382,7 @@ class Recorder:
              self._run_id, reason, result.status, dropped)
 
     def _validate_ticket(self, ticket):
+        self._check_process()
         with self._condition:
             if type(ticket) is not Ticket or ticket.owner is not self._ticket_owner:
                 raise InvalidInput("an operation requires its recorder-issued ticket")
@@ -371,6 +411,7 @@ class Recorder:
         return ordinary
 
     def _admit(self, prepared, bundle, *, turn_update=False):
+        self._check_process()
         for omission in range(3):
             rejection_turn = None if bundle.kind == "turn.start" else bundle.turn_id
             with self._condition:
@@ -426,6 +467,8 @@ class Recorder:
                 self._loss_turns.clear()
 
     def _reject(self, reason, turn_id=None, is_event=True, turn_update=False):
+        if not self._in_creator_process():
+            return CaptureResult("rejected", "wrong_process")
         with self._condition:
             self._dropped_events += int(is_event)
             self._note_reasons((reason, *(('turn_update_lost',) if turn_update else ())))
@@ -441,6 +484,7 @@ class Recorder:
             self._committed.popitem(last=False)
 
     def _lookup(self, category, identity, *, fallback=None):
+        self._check_process()
         key = (category, identity)
         with self._condition:
             pending = self._pending.get(key)
@@ -454,6 +498,7 @@ class Recorder:
 
     def _read_identity(self, category, identity):
         """Fallback creates/uses/closes its read connection on this caller thread."""
+        self._check_process()
         with closing(_storage.connect(self._path, readonly=True,
                                       timeout=self._limits["busy_timeout_ms"] / 1000)) as reader:
             reader.row_factory = sqlite3.Row
@@ -461,6 +506,7 @@ class Recorder:
 
     def _lookup_connection(self, reader, category, identity):
         """Read one current statement; only durable positive rows enter memory."""
+        self._check_process()
         where = {"event": "event_id=?", "decision": "decision_id=? AND kind='model.tool_call'",
                  "model": "model_call_id=? AND kind='model.request'"}[category]
         with closing(reader.execute("SELECT * FROM observed_events WHERE run_id=? AND " + where,
@@ -538,13 +584,22 @@ class Recorder:
             self._condition.notify_all()
 
     def health(self):
+        if not self._in_creator_process():
+            return self._health_snapshot("wrong_process")
         with self._condition:
-            return Health(self._state, self._dropped_events, self._writer_errors,
-                          MappingProxyType(dict(self._reason_counts)), len(self._tickets),
-                          Capacity(self._ordinary_bytes, self._limits["ordinary_bytes"], self._ordinary_slots,
-                                   self._limits["ordinary_items"]),
-                          Capacity(self._completion_bytes, self._limits["completion_bytes"], self._completion_slots,
-                                   self._limits["completion_items"]))
+            return self._health_snapshot(self._state)
+
+    def _health_snapshot(self, state):
+        reasons = dict(self._reason_counts)
+        if state == "wrong_process":
+            # Other fields are inherited observations, not live parent health.
+            reasons["wrong_process"] = 1
+        return Health(state, self._dropped_events, self._writer_errors,
+                      MappingProxyType(reasons), len(self._tickets),
+                      Capacity(self._ordinary_bytes, self._limits["ordinary_bytes"], self._ordinary_slots,
+                               self._limits["ordinary_items"]),
+                      Capacity(self._completion_bytes, self._limits["completion_bytes"], self._completion_slots,
+                               self._limits["completion_items"]))
 
     def _closure_snapshot(self):
         with self._condition:
@@ -586,6 +641,8 @@ class Recorder:
             self._condition.notify_all()
 
     def _close_result(self, joined, reason=None):
+        if not self._in_creator_process():
+            return CloseResult(False, None, False, "wrong_process")
         with self._condition:
             retry_alive = self._retry_thread is not None and self._retry_thread.is_alive()
             current_reason = "writer_running" if retry_alive else self._final_reason
@@ -594,6 +651,8 @@ class Recorder:
 
     def _log_close_result(self, result):
         """Log changed public outcomes, after all shutdown locks are released."""
+        if not self._in_creator_process():
+            return CloseResult(False, None, False, "wrong_process")
         with self._condition:
             if result == self._last_close_log:
                 return result
@@ -611,11 +670,15 @@ class Recorder:
 
     def _join_writer(self, deadline):
         """Join within an existing caller budget without changing diagnostics."""
+        if not self._in_creator_process():
+            return False
         self._writer_thread.join(self._wait_budget(deadline))
         return not self._writer_thread.is_alive()
 
     def _close_wait_result(self, joined):
         """Account for one close wait after its owner join or caller timeout."""
+        if not self._in_creator_process():
+            return CloseResult(False, None, False, "wrong_process")
         if not joined:
             with self._condition:
                 self._note_reasons(("finalize_timeout",))
@@ -623,12 +686,16 @@ class Recorder:
         return self._close_result(True)
 
     def close(self, timeout=5.0):
+        if not self._in_creator_process():
+            return CloseResult(False, None, False, "wrong_process")
         timeout = timeout_seconds(timeout)
         deadline = time.monotonic() + timeout
         self._start_shutdown(deadline)
         return self._log_close_result(self._close_wait_result(self._join_writer(deadline)))
 
     async def aclose(self, timeout=5.0):
+        if not self._in_creator_process():
+            return CloseResult(False, None, False, "wrong_process")
         timeout = timeout_seconds(timeout)
         deadline = time.monotonic() + timeout
         self._start_shutdown(deadline)
@@ -641,12 +708,16 @@ class Recorder:
         return self._log_close_result(self._close_wait_result(joined))
 
     def finalize(self, timeout=5.0):
+        if not self._in_creator_process():
+            return CloseResult(False, None, False, "wrong_process")
         timeout = timeout_seconds(timeout)
         deadline = time.monotonic() + timeout
         return self._log_close_result(self._finalize_wait(deadline))
 
     def _finalize_wait(self, deadline):
         """Share the retry owner without invoking application handlers under its lock."""
+        if not self._in_creator_process():
+            return CloseResult(False, None, False, "wrong_process")
         if self._writer_thread.is_alive():
             return self._close_result(False, "writer_running")
         self._writer_thread.join()

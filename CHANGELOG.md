@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Add `AgentRecorder` with caller-owned conversation history, explicit selected attempts, stable replay keys and prepared text snapshots over the existing JSON/OpenAI and modern MCP boundaries. Preserve host selection, native execution, retry and stream ownership.
+- Add bounded `inspect.diagnose` / `fr doctor`, readable `turns` and `explain` views, and explicit latest-turn selection. Explain validated preparation separately while preserving existing inspection JSON, raw mismatch flags and statistics.
+- Reject recorder use from a foreign process before recorder-owned locks or storage access, and clean up failed construction only when file ownership is established. Keep fresh-worker lifecycle and fresh-path recovery explicit.
+- Add the integration concepts/recipes and facade demo without changing schema 6 or adding core runtime dependencies.
+
 ## 0.5.18
 
 - Add a deterministic SDK-backed model → selected MCP tool → prepared answer example with capture-on/off comparison and a guided `fr turns` / `fr explain` investigation. Preserve the SDK-free quickstart and existing capture/inspection contracts.

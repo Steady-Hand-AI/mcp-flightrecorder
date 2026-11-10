@@ -8,6 +8,8 @@ from . import inspect
 from ._inspect_common import (InspectionError, encode, error_envelope, run_read,
                               validate_id, validate_int, validate_path, validate_timeout)
 from ._snapshot import snapshot
+from ._inspect_diagnostics import FORMAT as DIAGNOSTIC_FORMAT
+from ._inspect_text import render
 
 
 class Parser(argparse.ArgumentParser):
@@ -27,7 +29,7 @@ def _run_options(parser):
 
 
 def _parser():
-    parser = Parser(prog="fr", description="Inspect retained recording evidence as bounded JSON.")
+    parser = Parser(prog="fr", description="Inspect retained recording evidence as bounded JSON or opt-in text.")
     parser.add_argument("--version", action="version", version="mcp-flightrecorder " + __version__)
     commands = parser.add_subparsers(dest="command", required=True, parser_class=Parser)
     runs = commands.add_parser("runs", help="List recorded runs.")
@@ -44,15 +46,28 @@ def _parser():
     _run_options(turns)
     turns.add_argument("--limit", type=int, default=50)
     turns.add_argument("--cursor")
+    turns.add_argument("--text", action="store_true", help="Render readable labels and machine IDs.")
+    turns.add_argument("--last", action="store_true", help="Select the latest matching recorded turn.")
     for name in ("condition-key", "host-outcome", "capture-state"):
         turns.add_argument("--" + name)
     for name in ("tool-error", "text-mismatch", "unattributed-operation", "forwarded-change"):
         turns.add_argument("--" + name, choices=("true", "false"))
     explain = commands.add_parser("explain", help="Explain one turn or model call.")
     explain.add_argument("database")
-    explain.add_argument("--turn", required=True)
+    selection = explain.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--turn")
+    selection.add_argument("--last", action="store_true", help="Select the latest recorded turn in the selected run.")
     explain.add_argument("--model-call")
+    explain.add_argument("--text", action="store_true")
     _run_options(explain)
+    doctor = commands.add_parser("doctor", help="Describe bounded recorded gaps and likely corrective actions; not a PASS gate.")
+    doctor.add_argument("database")
+    _run_options(doctor)
+    doctor.add_argument("--limit", type=int, default=50)
+    doctor.add_argument("--json", action="store_true", help="Emit the separate mfr.diagnose/1 envelope.")
+    selection = doctor.add_mutually_exclusive_group()
+    selection.add_argument("--turn")
+    selection.add_argument("--last", action="store_true")
     payload = commands.add_parser("payload", help="Read explicitly requested retained content.")
     payload.add_argument("database")
     payload.add_argument("artifact_id")
@@ -81,7 +96,7 @@ def _parser():
 
 
 def _operation(command):
-    return {"turns": "find_turns", "sql": "query"}.get(command, command if command in {
+    return {"turns": "find_turns", "sql": "query", "doctor": "diagnose"}.get(command, command if command in {
         "check", "explain", "payload", "slice", "runs", "schema", "snapshot"} else "schema")
 
 
@@ -135,12 +150,19 @@ def _validate_scoped(args):
     if args.command == "turns":
         validate_int(args.limit, 1, 200, "limit")
         _filters(args)
+        if args.last and args.cursor is not None:
+            raise InspectionError("invalid_request", "invalid_last", "--last cannot be combined with --cursor.")
     elif args.command == "check":
         _expect(args.expect)
     elif args.command == "explain":
-        validate_id(args.turn, "turn_id")
+        if args.turn is not None:
+            validate_id(args.turn, "turn_id")
         if args.model_call is not None:
             validate_id(args.model_call, "model_call_id")
+    elif args.command == "doctor":
+        validate_int(args.limit, 1, 200, "limit")
+        if args.turn is not None:
+            validate_id(args.turn, "turn_id")
     elif args.command == "payload":
         validate_id(args.artifact_id, "artifact_id")
         validate_int(args.offset, 0, 2 ** 63 - 1, "offset")
@@ -168,9 +190,19 @@ def _scoped(args, run_id):
         return inspect.check(args.database, run_id, _expect(args.expect), **common)
     if args.command == "turns":
         return inspect.find_turns(args.database, run_id, filters=_filters(args),
-                                  limit=args.limit, cursor=args.cursor, **common)
+                                  limit=args.limit, cursor=args.cursor, last=args.last, **common)
+    if args.command in {"explain", "doctor"} and args.last:
+        selected = inspect.find_turns(args.database, run_id, last=True, **common)
+        if not selected["ok"]:
+            selected["operation"] = _operation(args.command)
+            return selected
+        if not selected["data"]["items"]:
+            return error_envelope(_operation(args.command), "unknown_turn", "no_turns", "The selected run has no recorded turns.")
+        args.turn = selected["data"]["items"][0]["turn"]["turn_id"]
     if args.command == "explain":
         return inspect.explain(args.database, run_id, args.turn, args.model_call, **common)
+    if args.command == "doctor":
+        return inspect.diagnose(args.database, run_id, turn_id=args.turn, limit=args.limit, **common)
     if args.command == "payload":
         return inspect.payload(args.database, run_id, args.artifact_id, args.offset, args.max_bytes, **common)
     return inspect.slice(args.database, run_id, args.request_event_id, limit=args.limit,
@@ -212,6 +244,7 @@ def main():
     """Emit one result; expected errors never include arbitrary parser input."""
     arguments = sys.argv[1:]
     operation = _operation(arguments[0] if arguments else None)
+    args = None
     try:
         try:
             args = _parser().parse_args(arguments)
@@ -221,8 +254,14 @@ def main():
                 result = error_envelope(operation, error.code, error.reason, error.message)
             else:
                 result = error_envelope(operation, "invalid_request", "invalid_cli", "The command arguments are invalid; use fr --help.")
-        serialized = encode(result).decode("utf-8")
-        sys.stdout.write(serialized + "\n")
+        if operation == "diagnose":
+            result["format"] = DIAGNOSTIC_FORMAT
+        as_text = args is not None and (getattr(args, "text", False) or (args.command == "doctor" and not args.json))
+        if as_text:
+            sys.stdout.write(render(result, args.max_output_bytes))
+        else:
+            serialized = encode(result).decode("utf-8")
+            sys.stdout.write(serialized + "\n")
         return exit_status(result)
     except KeyboardInterrupt:
         return 130

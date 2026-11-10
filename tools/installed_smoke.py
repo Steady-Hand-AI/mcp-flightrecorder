@@ -86,6 +86,22 @@ def main():
         connection.close()
     assert hashlib.sha256(recording.read_bytes()).hexdigest() == original_hash
     assert all(not Path(str(copy) + suffix).exists() for suffix in ("-wal", "-shm", "-journal"))
+    facade_recording = output / "agent.sqlite"
+    facade_result = run([sys.executable, "-I", "-B", str(source / "examples/agent_recorder.py"),
+                         "--output", str(facade_recording)])
+    assert facade_result == {"answer": "alpha", "recording": str(facade_recording)}
+    disabled_path = output / "disabled.sqlite"
+    disabled_result = run([sys.executable, "-I", "-B", str(source / "examples/agent_recorder.py"),
+                           "--output", str(disabled_path), "--disabled"])
+    assert disabled_result == {"answer": "alpha", "recording": None}
+    assert not disabled_path.exists()
+    diagnosis = run([cli, "doctor", str(facade_recording), "--json"])
+    assert diagnosis["ok"] and diagnosis["format"] == "mfr.diagnose/1"
+    assert diagnosis["data"]["whole_run_verdict"] == "not_evaluated"
+    assert run([cli, "doctor", str(facade_recording)], json_output=False)
+    assert run([cli, "turns", str(facade_recording), "--last", "--text"], json_output=False)
+    assert run([cli, "explain", str(facade_recording), "--last", "--text"], json_output=False)
+    assert len(inspect("turns", str(facade_recording))["items"]) == 2
     report = {
         "result": "PASS", "python": sys.version, "executable": sys.executable,
         "sqlite": sqlite3.sqlite_version, "installed_module": str(installed),

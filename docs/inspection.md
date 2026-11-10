@@ -1,6 +1,43 @@
 # Inspection API and CLI
 
-**Package 0.5.18 · schema 6 · format `mfr.inspect/1`.** One standard-library reader serves Python and the JSON CLI. It exposes retained observations, explicit attribution and uncertainty. It does not score agents, write findings, repair recordings or infer provenance.
+**Package 0.5.18 · schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`.** Standard-library readers serve Python and the CLI. They expose retained observations, explicit attribution and uncertainty. They do not score agents, write findings, repair recordings or infer provenance.
+
+## Start with a readable investigation
+
+```sh
+fr doctor recording.sqlite
+fr turns recording.sqlite --last --text
+fr explain recording.sqlite --last --text
+# Copy a displayed model-call ID to inspect its recorded details:
+fr explain recording.sqlite --last --model-call MODEL_CALL_ID --text
+```
+
+`--last` selects the latest recorded turn by `started_at`, then `turn_id`; it does not select an active conversation or infer which user you meant. With `turns`, filters apply before selecting the last match. Use `--turn TURN_ID` for a stable explicit selection. If a file has multiple runs, first use `fr runs recording.sqlite`, then add `--run RUN_ID` to each command. Ambiguous and empty run populations are refused. A run with no recorded turns cannot satisfy `explain --last` or `doctor --last`.
+
+The numbered turn and model-call labels are local display labels; the displayed IDs remain authoritative. `turns` and `explain` still emit their existing JSON by default. `--text` escapes control characters and keeps unknowns and cutoffs visible. Continue a turn page with its displayed `--cursor`, or narrow the selection; `--last` cannot be combined with a cursor. Text output has the selected `--max-output-bytes` budget, including its terminal newline, and announces text clipping. A clipped view is incomplete.
+
+`doctor` defaults to readable text; `--json` returns the diagnostic envelope below. Its successful exit means that inspection completed, **not** that every event was captured or that the agent answered correctly. Missing evidence does not prove one unique missing host call. Recorded metadata and labels remain untrusted and potentially sensitive.
+
+### Diagnostic report and preparation
+
+```python
+report = inspect.diagnose(
+    "recording.sqlite", run_id=None, turn_id=None,
+    limit=50, max_output_bytes=65536, no_content=True, timeout=10.0,
+)
+```
+
+`diagnose` is the one public diagnosis function. It uses one existing read snapshot, infers a run only from exact singleton cardinality, and returns the common transport fields with `format="mfr.diagnose/1"` and `operation="diagnose"`. The original `mfr.inspect/1` readers, flags, statistics and `schema()` response keep their existing meanings. Diagnosis is a separate descriptive contract.
+
+The diagnostic `data` object contains `run`, `diagnostics`, `preparations`, `evaluated_events`, `event_limit`, `events_remaining`, `diagnostics_omitted`, `preparations_omitted`, and `whole_run_verdict="not_evaluated"`. Each diagnostic has a `code`, explicit `location`, factual `observed` description and a likely corrective `hint`. Categories distinguish unknown bindings, intentional metadata content omission, unsupported request input, rejected/lost capture and writer failure. Run health counters describe the whole run even when a turn is selected. Facade development diagnostics are live local information; doctor does not pretend that every such note was persisted.
+
+`limit` is 1–200 (default 50), bounding inspected events and each displayed array separately. Events are visited in recorded sequence order, optionally within `turn_id`. Event limits, omitted items, reader unknowns and output clipping remain explicit. Doctor has no whole-run PASS state, including for an empty or apparently healthy page. `--limit`, `--turn`, `--last`, `--run`, `--timeout` and `--max-output-bytes` provide bounded investigation choices. A deadline returns an operational error, not a partial successful report. CLI run and latest-turn selection are separate bounded reads before the requested reader, so they do not promise one end-to-end snapshot or deadline.
+
+Each preparation entry names its insertion link, prepared event, submitting request and target pointer. It reports `state` (`matches`, `differs`, or `unknown`), `prepared_text_equal`, `raw_text_equal`, `reason`, `source_count`, `unavailable_sources`, and `semantic_equivalence="not_verified"`. A positive entry means **host declared preparation; prepared text matches submitted text**. It requires authoritative same-run endpoints in order, valid insertion and answer membership, every declared source resolved and complete, and compatible `observed_original` `text_blocks_json/1` tokens. The selected original result must be one of the declared sources, and the original result comparison must be available. Source validation finishes completely within the deadline; a sampled source list cannot earn a positive result.
+
+Metadata retention can preserve those tokens and therefore support a selected-text comparison without retained bodies. It does not excuse a missing source, invalid pointer, incomplete observation or incompatible token. Unsupported structures, unavailable original comparisons and ambiguous submitted locations remain unknown. There is no fallback from original evidence to a retained, redacted or truncated prefix. A root source location can be resolved with an omitted body; an unavailable nested source location remains uncertain.
+
+Declared preparation never clears `text_mismatch` or changes `text_equal`. Prepared text can match what was submitted while differing from the raw tool result. Matching prepared bytes establish neither semantic equivalence nor model attention, causality or answer correctness. A changed prepared message yields `differs` when compatible original tokens remain available.
 
 ## 1. Public Python surface and limits
 
@@ -9,7 +46,7 @@ Use `from mcp_flightrecorder import inspect`. This is a package submodule; impor
 ```python
 check(path, run_id, expect=None, *, max_output_bytes=65536, no_content=False, timeout=10.0)
 find_turns(path, run_id, *, filters=None, limit=50, cursor=None,
-           max_output_bytes=65536, no_content=False, timeout=10.0)
+           max_output_bytes=65536, no_content=False, timeout=10.0, last=False)
 explain(path, run_id, turn_id, model_call_id=None, *,
         max_output_bytes=65536, no_content=False, timeout=10.0)
 payload(path, run_id, artifact_id, offset=0, max_bytes=4096, *,
@@ -50,7 +87,7 @@ Answer completeness is evaluated for each occurrence, not reused from an earlier
 
 ## 2. Envelope, encoding and error rules
 
-Every operation, including `schema` and CLI snapshot, uses these exact top-level keys:
+Every inspection operation, including `schema` and CLI snapshot, uses these exact top-level keys. The separate diagnosis contract above uses the same keys with its own format and operation:
 
 ```json
 {
@@ -212,16 +249,17 @@ Retained BLOB or non-finite REAL cells reject the entire query with sql_rejected
 
 ## 8. CLI and local snapshot
 
-All options follow the subcommand. Successful/expected-error commands emit exactly one compact JSON value plus newline to stdout. Diagnostics live in that envelope, without progress text. Parse failures also return invalid_request JSON/exit 1. Explicit help/version may use conventional text. `--text` and `--acceptance` are unsupported, not ignored. No command is an MCP server.
+All options follow the subcommand. The original commands default to exactly one compact JSON value plus newline on stdout, without progress text. `turns --text` and `explain --text` opt into readable output; `doctor` defaults to text and offers `--json`. Parse failures return invalid_request JSON/exit 1. Explicit help/version may use conventional text. `--acceptance` remains unsupported. No command is an MCP server.
 
-Common read options: `--max-output-bytes N`, `--no-content`. The five scoped readers additionally accept `--timeout SECONDS` (default 10, positive finite numeric value at most 30). Timeout validation precedes implicit run selection. Run-scoped CLI commands accept `--run ID`; omit it only when actual DB cardinality is exactly one (not when a bounded first page happens to show one). Successful inference and the selected operation use two separate read transactions and deadlines; explicit `--run` uses only the operation's read. Zero/multiple runs yields invalid_request with `fr runs` guidance. Python always takes explicit run_id.
+Common read options: `--max-output-bytes N`, `--no-content`. The scoped readers and doctor additionally accept `--timeout SECONDS` (default 10, positive finite numeric value at most 30). Timeout validation precedes implicit run selection. Run-scoped CLI commands accept `--run ID`; omit it only when actual DB cardinality is exactly one (not when a bounded first page happens to show one). Successful inference and the selected operation use separate read transactions and deadlines; `explain --last` and `doctor --last` add latest-turn selection. Zero/multiple runs yields invalid_request with `fr runs` guidance. Python inspection readers take explicit run_id; `diagnose` also supports singleton inference within its own snapshot.
 
 | Command | Additional arguments |
 |---|---|
 | `fr runs DB` | `--limit`, `--cursor` |
 | `fr check DB` | `--run`, `--timeout`, `--expect model,host,mcp` (nonempty CSV, no duplicates) |
-| `fr turns DB` | `--run`, `--timeout`, seven §4 filter flags in kebab-case; booleans `true|false`; `--limit`, `--cursor` |
-| `fr explain DB --turn ID` | `--run`, `--timeout`, `--model-call ID` |
+| `fr turns DB` | `--run`, `--timeout`, seven §4 filter flags in kebab-case; booleans `true|false`; `--limit`, `--cursor`, `--last`, `--text` |
+| `fr explain DB --turn ID` | `--last` instead of `--turn`; `--run`, `--timeout`, `--model-call ID`, `--text` |
+| `fr doctor DB` | `--run`, `--timeout`, `--turn ID` or `--last`, `--limit`, `--json` |
 | `fr payload DB ARTIFACT_ID` | `--run`, `--timeout`, `--offset`, `--max-bytes` |
 | `fr slice DB REQUEST_EVENT_ID` | `--run`, `--timeout`, `--limit`, `--max-depth` |
 | `fr sql DB SQL` | `--params JSON` array/object, `--limit`, `--timeout`; no run selector |

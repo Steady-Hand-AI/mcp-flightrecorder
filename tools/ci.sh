@@ -68,6 +68,7 @@ if [[ "$profile" == core ]]; then
         tests/test_admission.py tests/test_async_shutdown.py tests/test_bindings.py
         tests/test_capture_values.py tests/test_comparisons.py tests/test_contract.py
         tests/test_core.py tests/test_deferred.py tests/test_duplicate_transition.py
+        tests/test_easy.py tests/test_lifecycle_ownership.py tests/test_inspection_diagnostics.py
         tests/test_failures.py tests/test_finalization.py tests/test_fixture.py
         tests/test_inspection_logging.py tests/test_inspection_query.py
         tests/test_inspection_snapshot.py tests/test_logging.py
@@ -77,6 +78,7 @@ else
     tests=(
         tests/test_integration_fixture.py tests/test_integration_history.py
         tests/test_tool_roundtrip.py
+        tests/test_easy_sdk.py
         tests/test_mcp_client.py tests/test_openai_chat.py
         tests/test_inspection_checks.py tests/test_inspection_commands.py
         tests/test_inspection_content.py tests/test_inspection_inputs.py

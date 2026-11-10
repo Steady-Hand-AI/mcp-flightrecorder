@@ -102,7 +102,7 @@ class ReleaseArtifactsTests(unittest.TestCase):
 
     def test_manifest_shapes_identity_and_types_fail_closed(self):
         changes = [
-            ("repository", "different/project"), ("version", "0.5.016"), ("tag", "v0.5.20"),
+            ("repository", "different/project"), ("version", "0.5.016"), ("tag", "v0.5.21"),
             ("commit", "A" * 40), ("commit", "1" * 7), ("tree", "2" * 39), ("schema", True),
             ("tag_object", "1" * 7), ("toolchain", {"python": "version with paths"}),
             ("artifacts", self.manifest["artifacts"] * 2),

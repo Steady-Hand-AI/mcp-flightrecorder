@@ -1,6 +1,6 @@
 # Add recording to an existing host
 
-`mcp_flightrecorder.easy.AgentRecorder` keeps capture bookkeeping inside the library. Your host still owns model requests, parsing, tool selection, retries, concurrency, client lifetimes and stream consumption. Use the [0.5.20 installation and complete demo](../README.md#install-and-record) to start from an empty directory.
+`mcp_flightrecorder.easy.AgentRecorder` keeps capture bookkeeping inside the library. Your host still owns model requests, parsing, tool selection, retries, concurrency, client lifetimes and stream consumption. Use the [0.5.21 installation and complete demo](../README.md#install-and-record) to start from an empty directory.
 
 ## The concepts
 
@@ -68,7 +68,7 @@ For exactly one actual invocation, `choice.answer(message)` is shorthand for tha
 
 ## Native OpenAI Chat
 
-Install `mcp-flightrecorder[openai-chat]==0.5.20` in your environment. Keep selection and argument parsing on the native response, including which completion alternative and which tool occurrence your application chooses.
+Install `mcp-flightrecorder[openai-chat]==0.5.21` in your environment. Keep selection and argument parsing on the native response, including which completion alternative and which tool occurrence your application chooses.
 
 ```python
 import json

@@ -103,6 +103,7 @@ def _parser():
     mcp = commands.add_parser("mcp", help="Serve one stable portable recording through optional stdio MCP.")
     mcp.add_argument("database")
     mcp.add_argument("--allow-content", action="store_true", help="Enable explicit retained-payload reads; other tools still omit bodies.")
+    commands.add_parser("proxy", help="Forward one stdio child with optional MCP-boundary recording.")
     return parser
 
 
@@ -264,6 +265,10 @@ def exit_status(result):
 def main():
     """Emit one result; expected errors never include arbitrary parser input."""
     arguments = sys.argv[1:]
+    if arguments and arguments[0] == "proxy":
+        # This transport owns stdout even for configuration failures and help.
+        from ._proxy import main as proxy_main
+        return proxy_main(arguments[1:])
     operation = _operation(arguments[0] if arguments else None)
     args = None
     try:

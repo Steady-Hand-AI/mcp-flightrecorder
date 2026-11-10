@@ -26,6 +26,7 @@ compatibility_tests/legacy/host_run.py
 compatibility_tests/legacy/session_peer.py
 compatibility_tests/legacy/support.py
 compatibility_tests/legacy/test_host.py
+compatibility_tests/legacy/test_proxy.py
 compatibility_tests/legacy/test_session.py
 compatibility_tests/native/__init__.py
 compatibility_tests/native/host_endpoint.py
@@ -47,6 +48,7 @@ docs/easy-integration.md
 docs/inspection.md
 docs/integrations.md
 docs/mcp-inspection.md
+docs/proxy.md
 docs/release-notes.md
 docs/releasing.md
 docs/testing.md
@@ -56,6 +58,7 @@ examples/fast_agent.py
 examples/fastmcp_session.py
 examples/inspect_recording.py
 examples/mcp_agent_session.py
+examples/proxy_server.py
 examples/pydantic_openai.py
 examples/quickstart.py
 examples/tool_roundtrip.py
@@ -92,6 +95,7 @@ src/mcp_flightrecorder/_inspect_slice.py
 src/mcp_flightrecorder/_inspect_text.py
 src/mcp_flightrecorder/_logging.py
 src/mcp_flightrecorder/_mcp_inspect.py
+src/mcp_flightrecorder/_proxy.py
 src/mcp_flightrecorder/_recorder.py
 src/mcp_flightrecorder/_snapshot.py
 src/mcp_flightrecorder/_storage.py
@@ -122,6 +126,8 @@ tests/fixtures/integration/provider-stream.json
 tests/fixtures/integration/provider-tools.json
 tests/fixtures/integration/request-order.json
 tests/producers/minimal_host.py
+tests/producers/proxy_peer.py
+tests/producers/proxy_sdk_peer.py
 tests/producers/record_core.py
 tests/recordings.py
 tests/test_admission.py
@@ -157,6 +163,8 @@ tests/test_logging.py
 tests/test_mcp_client.py
 tests/test_mcp_inspection.py
 tests/test_openai_chat.py
+tests/test_proxy.py
+tests/test_proxy_sdk.py
 tests/test_scale_regressions.py
 tests/test_scope_validation.py
 tests/test_shutdown.py

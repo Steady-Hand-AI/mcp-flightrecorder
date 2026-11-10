@@ -1,6 +1,6 @@
 # Inspection API and CLI
 
-**Package 0.5.19 · schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`.** Standard-library readers serve Python and the CLI. They expose retained observations, explicit attribution and uncertainty. They do not score agents, write findings, repair recordings or infer provenance.
+**Package 0.5.20 · schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`.** Standard-library readers serve Python and the CLI. They expose retained observations, explicit attribution and uncertainty. They do not score agents, write findings, repair recordings or infer provenance.
 
 ## Start with a readable investigation
 
@@ -55,11 +55,14 @@ slice(path, run_id, request_event_id, *, limit=1000, max_depth=12,
       max_output_bytes=65536, no_content=False, timeout=10.0)
 query(path, sql, params=None, *, limit=200, timeout=10.0,
       max_output_bytes=65536, no_content=False)
-runs(path, *, limit=50, cursor=None, max_output_bytes=65536, no_content=False)
+runs(path, *, limit=50, cursor=None, max_output_bytes=65536, no_content=False, timeout=10.0)
+gate(path, run_id=None, *, expect=None, min_activity=None,
+     max_output_bytes=65536, timeout=10.0)
+snapshot(path, output, *, timeout=10.0)
 schema()
 ```
 
-`path` is a string or `os.PathLike` local file path, not a caller-supplied SQLite URI. IDs are nonempty strings. Integers exclude bool; booleans are actual bool. Invalid argument values/types/ranges and non-finite numbers are `invalid_request`. Wrong Python arity or an unknown Python keyword may retain native `TypeError`; unknown CLI arguments use the JSON invalid_request rule. `expect` is None or a list/tuple/set/frozenset of distinct names from `model`, `host`, `mcp`; preserve canonical model, host, MCP output order without mutating callers. Duplicate list/tuple entries are invalid; sets already contain distinct values. Empty Python collections mean no additional expectation. A string or unknown name, including `context`, is invalid. `filters` is None or the closed mapping in §4. No automatic coercion of arbitrary Python objects.
+`path` is a string or `os.PathLike` local file path, not a caller-supplied SQLite URI. IDs are nonempty strings. Integers exclude bool; booleans are actual bool. Invalid argument values/types/ranges and non-finite numbers are `invalid_request`. Wrong Python arity or an unknown Python keyword may retain native `TypeError`; unknown CLI arguments use the JSON invalid_request rule. `check` accepts `expect=None` or a list/tuple/set/frozenset of distinct names from `model`, `host`, `mcp`; preserve canonical model, host, MCP output order without mutating callers. Duplicate list/tuple entries are invalid; sets already contain distinct values. For `check`, empty Python collections mean no additional expectation; `gate` has stricter expectations below. A string or unknown name, including `context`, is invalid. `filters` is None or the closed mapping in §4. No automatic coercion of arbitrary Python objects.
 
 | Limit | Default / permitted range |
 |---|---|
@@ -74,12 +77,12 @@ schema()
 | Query rows / input SQL | 200 (1–1,000) / 65,536 UTF-8 bytes |
 | Query SQLite strings / BLOBs / encoded rows | 8,388,608 bytes; fixed, independent of output, display, payload and cache budgets |
 | Diagnostics | 20 unknowns and 20 cutoff entries; count omitted entries |
-| Reader invocation / snapshot deadline | 10 seconds; check/find_turns/explain/payload/slice/query/snapshot permit finite numeric `0 < timeout <= 30`, excluding bool |
+| Reader invocation / snapshot deadline | 10 seconds; check/find_turns/explain/payload/slice/query/runs/diagnose/gate/snapshot permit finite numeric `0 < timeout <= 30`, excluding bool |
 | SQLite busy wait | At most 1,000 ms and remaining deadline |
 
 All limits are practical/cooperative bounds, not an OS timeout or total-memory guarantee. Each reader invocation has one monotonic deadline covering opening, reading, conversion and encoding, with checks between Python work and an SQLite progress handler. A completed count must finish within that deadline; otherwise the invocation returns an operational error. CLI run inference, when needed, is a separate reader invocation with its own deadline before the selected operation. The implementation has no process-isolation guarantee.
 
-The five scoped readers accept keyword-only `timeout=10.0`. Invalid timeout values are rejected before recording access. The corresponding CLI commands forward `--timeout` to **each** read: an inferred run uses one selection read and one operation read, each with the chosen budget; an explicit run uses only the operation read. This is not a single end-to-end deadline. `runs` retains its fixed default interface, and SQL/snapshot timeout behavior is unchanged.
+The scoped readers and `runs` accept keyword-only `timeout=10.0`. Invalid timeout values are rejected before recording access. The corresponding CLI commands forward `--timeout` to **each** read: an inferred run uses one selection read and one operation read, each with the chosen budget; an explicit run uses only the operation read. This is not a single end-to-end deadline. `runs` forwards the same chosen timeout; SQL/snapshot timeout behavior is unchanged. Gate selects and evaluates its run in one transaction and deadline.
 
 Within one read snapshot, a private LRU retains immutable event/artifact rows, relation facts, compact answer descriptors and conservative membership minima. It has an **8,388,608-byte accounted cap, 4,096-entry cap and 1,048,576-byte per-entry cap**. Accounting includes keys, values and conservative container overhead. Request manifests and oversized entries bypass the cache. These limits do not bound SQL buffers, returned arrays or process RSS. Missing rows are cached only for that snapshot; raw and observed rows, runs and later calls stay distinct. Deadlines are checked even on cache hits, and the cache is cleared on success or failure.
 
@@ -87,7 +90,7 @@ Answer completeness is evaluated for each occurrence, not reused from an earlier
 
 ## 2. Envelope, encoding and error rules
 
-Every inspection operation, including `schema` and CLI snapshot, uses these exact top-level keys. The separate diagnosis contract above uses the same keys with its own format and operation:
+Every inspection operation, including `schema`, `gate` and snapshot, uses these exact top-level keys. The separate diagnosis contract above uses the same keys with its own format and operation:
 
 ```json
 {
@@ -104,7 +107,7 @@ Every inspection operation, including `schema` and CLI snapshot, uses these exac
 }
 ```
 
-Operation names are Python function names (`find_turns`, `query`), plus `snapshot`. Scope contains only applicable validated IDs: `run_id`, `turn_id`, `model_call_id`, `request_event_id`, `artifact_id`. Discovery/schema/query/snapshot use `{}`. On failure `ok=false`, `data=null`, `error={"code":..., "reason":..., "message":...}`; scope may be `{}` to avoid echoing invalid/oversized input. A successful `check` with failed integrity items still has `ok=true`: the read completed. CLI status then follows its check result.
+Operation names are Python function names (`find_turns`, `query`), including `snapshot` and `gate`. Scope contains only applicable validated IDs: `run_id`, `turn_id`, `model_call_id`, `request_event_id`, `artifact_id`. Discovery/schema/query/snapshot use `{}`. On failure `ok=false`, `data=null`, `error={"code":..., "reason":..., "message":...}`; scope may be `{}` to avoid echoing invalid/oversized input. A successful `check` with failed integrity items still has `ok=true`: the read completed. CLI status then follows its check result.
 
 An unknown/cutoff entry has `code` (stable machine reason), `path` (JSON Pointer into data or empty), `ids` (applicable named IDs) and `count` (nonnegative integer, or null if unknowable). Codes use specific reasons such as `manifest_unavailable`, `association_unresolved`, `non_authoritative`, `missing_endpoint`, `comparison_unavailable`, `item_limit`, `byte_limit`, `string_limit`, `depth_limit`. Additional specific reason strings are allowed; the fields and error codes are fixed. Diagnostics must not contain bodies, arbitrary input or exception reprs. Omitted diagnostics increment the respective counter; zero never conceals discarded entries.
 
@@ -126,11 +129,11 @@ Pages use the last **emitted** item after byte trimming, never the last scanned 
 | `recording_unreadable` | 3 | Missing/unreadable/corrupt DB or other storage failure |
 | `recording_open_wal` | 3 | Established WAL-related read failure; accessible original/complete stopped fileset needed |
 
-Successful ordinary commands exit 0. `check` exits **2** for any required fail, otherwise **4** for any required unknown, otherwise 0; fail outranks unknown. There is no score threshold. Python does not swallow `KeyboardInterrupt` or `SystemExit`; CLI interruption exits 130 without a partial success envelope. Unexpected implementation exceptions propagate rather than being converted into `recording_unreadable` storage errors.
+Successful ordinary commands exit 0. `check` and `gate` exit **2** for any required fail, otherwise **4** for any required unknown, otherwise 0; fail outranks unknown. There is no score threshold. Python does not swallow `KeyboardInterrupt` or `SystemExit`; CLI interruption exits 130 without a partial success envelope. Unexpected implementation exceptions propagate rather than being converted into `recording_unreadable` storage errors.
 
 ## 3. Read scope, metadata projection and comparison
 
-Each reader invocation owns one escaped `mode=ro` SQLite connection and short read transaction, closed explicitly on success/failure/interruption. It sets `query_only` and verifies version 6 and the required names/columns in [schema.sql](../sql/schema.sql). Benign additional indexes are compatible. It does not compare DDL text, create schema, set source journal mode or use `immutable=1`. A run-scoped CLI command without `--run` first selects the sole run in a separate read, then invokes the selected reader; an explicit `--run` avoids that lookup. `fr schema` returns static data without opening a recording. Pages are separate snapshots: live discovery is best effort, not a repeatable multi-page session. Prefer closed recordings or portable snapshots for measurements.
+Each reader invocation owns one escaped `mode=ro` SQLite connection and short read transaction, closed explicitly on success/failure/interruption. It sets `query_only` and verifies version 6 and the required names/columns in [schema.sql](../sql/schema.sql). Benign additional indexes are compatible. It does not compare DDL text, create schema, set source journal mode or use `immutable=1`. Most run-scoped CLI commands without `--run` first select the sole run in a separate read, then invoke the selected reader; an explicit `--run` avoids that lookup. `gate` and `diagnose` support singleton selection inside their own reader transaction, though CLI doctor may use separate selection reads. `fr schema` returns static data without opening a recording. Pages are separate snapshots: live discovery is best effort, not a repeatable multi-page session. Prefer closed recordings or portable snapshots for measurements.
 
 Error precedence is argument shape/range validation, no-content rejection, DB/schema opening, run/turn/child selection, cursor validation, then operation/encoding. Value validation needing stored content (such as a UTF-8 offset) occurs in the operation step. Unknown run is checked before children. A foreign-run/turn ID returns the same unknown code as an absent ID. A missing selected model call uses `unknown_event`, reason `unknown_model_call`. A present selected event of the wrong slice root kind is `invalid_request`; an unselected/non-authoritative root is `unknown_event`. Existing zero-call turns explain successfully.
 
@@ -215,6 +218,34 @@ Check processing consumes every answer occurrence for complete statistics but re
 
 All nine items and stats complete inside the check reader's single transaction and deadline. Timeout/storage failure returns `ok=false,data=null`, not partial PASS. Witness/output limits never change aggregates. Checks report recorded integrity and availability; they do not score behavior or write findings.
 
+### Evidence gate
+
+`check` describes integrity and availability; `gate` applies one complete-run policy under explicit host expectations. Doctor's bounded diagnostic page is not an input to this verdict.
+
+```python
+from mcp_flightrecorder import inspect
+
+report = inspect.gate(
+    "recording.sqlite", run_id=None,
+    expect=["model", "host", "mcp"],
+    min_activity={"turns": 1, "model_requests": 2, "model_responses": 2,
+                  "decisions": 1, "tool_calls": 1, "answer_occurrences": 1},
+    timeout=10.0, max_output_bytes=65536,
+)
+```
+
+`expect` must explicitly contain distinct `model` and `host` names; `mcp` is optional. Unlike `check`, missing/empty expectations are invalid. `min_activity` must be a nonempty ordinary dict over the supported count names in the example, with integers from 0 to 2**63−1 excluding bool. At least one **non-turn** minimum must be positive: empty turns alone cannot establish observed activity. CLI equivalents are `--expect model,host,mcp`, `--min-turns`, `--min-model-requests`, `--min-model-responses`, `--min-decisions`, `--min-tool-calls` and `--min-answer-occurrences`. Supply expectations that describe the actual application. Counts are observed facts, not estimates of unrecorded work.
+
+One owned read transaction selects the sole run when `run_id` is omitted, validates coverage/health/integrity and complete captured turns, and visits every relevant answer occurrence and `tools/call`. This includes records beyond display pages and witness samples. `data.expectations` contains boundaries and supplied minima; `data.actual_activity` contains all six observed counts. A completed evaluation sets `evaluation_complete=true`, independently of displayed witnesses; bounded witnesses are only illustrations. Each invocation has one cooperative deadline and always uses no-content output.
+
+Every submitted answer occurrence must have valid current and original-witness links. When a text comparison is required, compatible original raw text must match, or the exact occurrence must have fully validated declared preparation whose original prepared text matches the submitted text. The same-run endpoints, order, complete declared sources, selected source and original tokens must all be available and consistent. Explicit unresolved attribution or omitted relevant diagnostics cannot be promoted into positive evidence. Preparation preserves raw `text_equal`/`text_mismatch` and does not verify semantic equivalence.
+
+Each `tools/call` must be attributed through consistent authoritative evidence to its actual model decision or an explicitly declared host operation. A non-null ID or `link_basis` string is insufficient. `tools/list` discovery is exempt from that attribution requirement. A faithfully and completely recorded tool error is not failed merely because the tool returned an error.
+
+The envelope uses `format="mfr.inspect/1"`, `operation="gate"`. A completed evaluation has `ok=true` and `data.status` of `pass`, `fail` or `unknown`, producing CLI exits **0**, **2** or **4** respectively; fail outranks unknown. Operational errors use the existing `ok=false` error envelope and exits **1** or **3**. Timeout or required-output failure cannot return a successful gate. There is no score, policy language or metadata waiver. Missing comparisons and integrity unknowns remain unverified, even when retained bodies were intentionally omitted. This policy checks captured host-integrated evidence; it cannot certify answer quality, semantic equivalence or absence of unobserved calls. MCP-only coverage cannot silently become complete model/host coverage.
+
+See the [complete runnable command](mcp-inspection.md#use-the-evidence-gate-in-ci) for a prepared-answer recording and [MCP inspection](mcp-inspection.md) for bounded agent-facing investigation without a gate tool.
+
 ## 6. Slice: submitted-input ancestry
 
 `slice.data={"root_request_event_id":...,"runs":[],"turns":[],"events":[],"operations":[],"links":[],"artifacts":[],"members":[],"answers":[],"complete":bool,"frontier":[]}`. Root must be an authoritative model.request. `answers` uses the Answer projection. `frontier` holds up to 20 `{kind,id,depth,reason}` items; omitted diagnostics are counted. Complete means no unresolved required endpoint/manifest or traversal/output cutoff in the slice; it does not claim full capture or retained content.
@@ -249,13 +280,13 @@ Retained BLOB or non-finite REAL cells reject the entire query with sql_rejected
 
 ## 8. CLI and local snapshot
 
-All options follow the subcommand. The original commands default to exactly one compact JSON value plus newline on stdout, without progress text. `turns --text` and `explain --text` opt into readable output; `doctor` defaults to text and offers `--json`. Parse failures return invalid_request JSON/exit 1. Explicit help/version may use conventional text. `--acceptance` remains unsupported. No command is an MCP server.
+All options follow the subcommand. The original commands default to exactly one compact JSON value plus newline on stdout, without progress text. `turns --text` and `explain --text` opt into readable output; `doctor` defaults to text and offers `--json`. Parse failures return invalid_request JSON/exit 1. Explicit help/version may use conventional text. `--acceptance` remains unsupported. `fr mcp` is the optional stdio inspection server described in the [MCP guide](mcp-inspection.md); its stdout is MCP protocol traffic.
 
-Common read options: `--max-output-bytes N`, `--no-content`. The scoped readers and doctor additionally accept `--timeout SECONDS` (default 10, positive finite numeric value at most 30). Timeout validation precedes implicit run selection. Run-scoped CLI commands accept `--run ID`; omit it only when actual DB cardinality is exactly one (not when a bounded first page happens to show one). Successful inference and the selected operation use separate read transactions and deadlines; `explain --last` and `doctor --last` add latest-turn selection. Zero/multiple runs yields invalid_request with `fr runs` guidance. Python inspection readers take explicit run_id; `diagnose` also supports singleton inference within its own snapshot.
+Common read options: `--max-output-bytes N`, `--no-content`. `runs`, the scoped readers, gate and doctor additionally accept `--timeout SECONDS` (default 10, positive finite numeric value at most 30). Timeout validation precedes implicit run selection. Run-scoped CLI commands accept `--run ID`; omit it only when actual DB cardinality is exactly one (not when a bounded first page happens to show one). Successful inference and the selected operation use separate read transactions and deadlines; `explain --last` and `doctor --last` add latest-turn selection. Zero/multiple runs yields invalid_request with `fr runs` guidance. Python `diagnose` and `gate` support singleton inference within their own snapshots; the other run-scoped readers take an explicit run_id. CLI gate forwards selection to the same owned transaction without an independent lookup.
 
 | Command | Additional arguments |
 |---|---|
-| `fr runs DB` | `--limit`, `--cursor` |
+| `fr runs DB` | `--limit`, `--cursor`, `--timeout` |
 | `fr check DB` | `--run`, `--timeout`, `--expect model,host,mcp` (nonempty CSV, no duplicates) |
 | `fr turns DB` | `--run`, `--timeout`, seven §4 filter flags in kebab-case; booleans `true|false`; `--limit`, `--cursor`, `--last`, `--text` |
 | `fr explain DB --turn ID` | `--last` instead of `--turn`; `--run`, `--timeout`, `--model-call ID`, `--text` |
@@ -265,20 +296,22 @@ Common read options: `--max-output-bytes N`, `--no-content`. The scoped readers 
 | `fr sql DB SQL` | `--params JSON` array/object, `--limit`, `--timeout`; no run selector |
 | `fr schema` | No DB/options beyond help |
 | `fr snapshot DB OUT` | `--timeout` default 10; no run/content/output-budget options |
+| `fr gate DB` | `--run`, `--timeout`, `--expect`, named `--min-*` activity flags; always no-content |
+| `fr mcp DB` | Optional `[mcp]` dependency; `--allow-content` enables explicit payload calls |
 
 `python -m mcp_flightrecorder` is behaviorally identical. CLI output/exit follows Python data/error semantics, with run inference only as described. SQL CLI cannot represent bytes in JSON params; Python may bind them. Stdout JSON has no paths/SQL/content echoed into errors unnecessarily.
 
 Cyclic source or destination symlinks are rejected as `invalid_request/invalid_path`; ordinary nonexistent source recordings remain `recording_unreadable/storage_failure`, while fresh nonexistent destination paths are allowed. This is validation-time classification, not a guarantee against later filesystem changes.
 
-Snapshot is a separate local full-file copy utility. The installed [`_snapshot.py`](../src/mcp_flightrecorder/_snapshot.py) implements it without the source directory. Open source mode=ro and force an actual read before claiming it is available. Refuse self-copy or existing destination main/WAL/SHM/rollback-journal names (`OUT`, `OUT-wal`, `OUT-shm`, `OUT-journal`), including dangling symlinks. Back up under its cooperative deadline into a **private same-parent temporary staging directory**; let SQLite create/delete sidecars only there, finalize to DELETE, reopen the **staged** file mode=ro and verify its schema/run states. Prepare the bounded result and close the source **before** publishing. Use a single exclusive `os.link` to publish the verified main file atomically without overwrite. There is no public placeholder during backup and **no cleanup path ever unlinks a public destination pathname**. Preserve source rows/journal mode and observed run state, including open/incomplete; a portable copy does not mark capture clean. Never use immutable fallback, change source journal mode or delete source sidecars. On failure/interruption remove only the private stage after closing connections; an unremovable private stage yields `output_cleanup_failed`. A competitor arriving before publication is refused without deleting its main or sidecars. Immediately after a successful link, any visibly present destination sidecar yields `recording_unreadable/destination_finalize` rather than a false verified-success response; the public main may already exist and is never unlinked. An uncertain publication likewise preserves every public name. This post-link check is best effort: shared-directory writers can mutate names after the check, and snapshot does not claim an atomic multi-name lock on SQLite suffixes.
+`inspect.snapshot(path, output, *, timeout=10.0)` and `fr snapshot` share one local full-file copy implementation and result envelope. The installed [`_snapshot.py`](../src/mcp_flightrecorder/_snapshot.py) implements it without a source checkout. Open source mode=ro and force an actual read before claiming it is available. Refuse self-copy or existing destination main/WAL/SHM/rollback-journal names (`OUT`, `OUT-wal`, `OUT-shm`, `OUT-journal`), including dangling symlinks. Back up under its cooperative deadline into a **private same-parent temporary staging directory**, where SQLite may create/delete destination backup sidecars. Finalize that staged backup to DELETE, reopen it mode=ro and verify its schema/run states. Prepare the bounded result and close the source **before** publishing. Use a single exclusive `os.link` to publish the verified main file atomically without overwrite. There is no public placeholder during backup and **no cleanup path ever unlinks a public destination pathname**. The backup preserves recorded rows and observed run state, including open/incomplete; it does not intentionally modify source main content or mark capture clean. Never use immutable fallback, change source journal mode or delete source sidecars. SQLite acquisition from a WAL source may create or update source sidecars, including SHM. A read-only source connection does not promise that its fileset remains byte-for-byte untouched. This acquisition behavior differs from the MCP inspector, which requires a stable portable file and refuses WAL/SHM filesets before SQLite access. On failure/interruption remove only the private stage after closing connections; an unremovable private stage yields `output_cleanup_failed`. A competitor arriving before publication is refused without deleting its main or sidecars. Immediately after a successful link, any visibly present destination sidecar yields `recording_unreadable/destination_finalize` rather than a false verified-success response; the public main may already exist and is never unlinked. An uncertain publication likewise preserves every public name. This post-link check is best effort: shared-directory writers can mutate names after the check, and snapshot does not claim an atomic multi-name lock on SQLite suffixes.
 
 Snapshot data is `{output_path:string, journal_mode:"delete", verified:true, source_run_states:[{run_id,close_state}...]}`. `output_path` is the resolved absolute output path, including resolution of symlinked parent directories; it is not necessarily the exact path spelling supplied by the caller. The path is an intact output identity. Derive source_run_states from the verified destination snapshot, not a later reread of the changing source. Use the default envelope limit; if many run states exceed it, omit trailing states with cutoff while still reporting verified copy, not a fabricated total. Destination refusal is invalid_request, timeout query_timeout, storage failure recording_unreadable. recording_open_wal requires established WAL mode and related read failure; journal mode WAL by itself is not an error. If WAL status could not be established, keep generic unreadable. The installed CLI follows the error table above.
 
-`schema.data` is a static dictionary: `api_format`, `database_schema_version=6`, `package_version`, `operations` (function/CLI spelling, required args, optional defaults, helper/local-copy designation), `limits` (table §1; cursor scalar `cursor_chars=8192`), `errors` (code/exit table), `check_statuses` (pass/fail/unknown/not_applicable; warn reserved), `expect_boundaries`, `content_policy`. It does not open a recording. The additive fixed scalar `limits.query_value_bytes = 8388608` describes the query value/encoded-row policy without a caller option. `limits.scoped_reader_timeout` exposes `{default:10.0,min_exclusive:0,max:30}`; the five scoped operations expose `timeout:10.0` in their optional defaults. Existing `db_deadline_seconds` and `query_snapshot_timeout` keys remain.
+`schema.data` is a static dictionary: `api_format`, `database_schema_version=6`, `package_version`, `operations` (function/CLI spelling, required args, optional defaults, helper/local-copy designation), `limits` (table §1; cursor scalar `cursor_chars=8192`), `errors` (code/exit table), `check_statuses` (pass/fail/unknown/not_applicable; warn reserved), `expect_boundaries`, `content_policy`. It does not open a recording. Gate metadata describes its explicit required expectations/activity and status exits, and snapshot names its public Python entry. The additive fixed scalar `limits.query_value_bytes = 8388608` describes the query value/encoded-row policy without a caller option. `limits.scoped_reader_timeout` exposes `{default:10.0,min_exclusive:0,max:30}`; `runs` and the scoped operations expose `timeout:10.0` in their optional defaults. Existing `db_deadline_seconds` and `query_snapshot_timeout` keys remain.
 
 ## 9. Implementation map
 
-The public entry points are in [`inspect.py`](../src/mcp_flightrecorder/inspect.py) and [`cli.py`](../src/mcp_flightrecorder/cli.py). Shared envelopes, budgets, validation and read sessions live in [`_inspect_common.py`](../src/mcp_flightrecorder/_inspect_common.py). Record and relation projections are in `_inspect_records.py` and `_inspect_relations.py`; the check, navigation, slice and SQL modules implement their respective operations. [`_snapshot.py`](../src/mcp_flightrecorder/_snapshot.py) owns destination-only copying.
+The public entry points are in [`inspect.py`](../src/mcp_flightrecorder/inspect.py) and [`cli.py`](../src/mcp_flightrecorder/cli.py). Shared envelopes, budgets, validation and read sessions live in [`_inspect_common.py`](../src/mcp_flightrecorder/_inspect_common.py). Record and relation projections are in `_inspect_records.py` and `_inspect_relations.py`; the check, navigation, slice and SQL modules implement their respective operations. [`_snapshot.py`](../src/mcp_flightrecorder/_snapshot.py) owns snapshot acquisition, private staging and exclusive destination publication.
 
 [`sql/schema.sql`](../sql/schema.sql) defines the stored facts. [Architecture](architecture.md) explains writer ownership and identity; [Capture](capture.md) explains the observations those readers interpret; [Testing](testing.md) explains how executable fixtures are generated without stored recordings.
 

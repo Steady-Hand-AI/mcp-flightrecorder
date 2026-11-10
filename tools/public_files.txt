@@ -46,6 +46,7 @@ docs/capture.md
 docs/easy-integration.md
 docs/inspection.md
 docs/integrations.md
+docs/mcp-inspection.md
 docs/release-notes.md
 docs/releasing.md
 docs/testing.md
@@ -53,6 +54,7 @@ docs/tool_roundtrip.md
 examples/agent_recorder.py
 examples/fast_agent.py
 examples/fastmcp_session.py
+examples/inspect_recording.py
 examples/mcp_agent_session.py
 examples/pydantic_openai.py
 examples/quickstart.py
@@ -81,6 +83,7 @@ src/mcp_flightrecorder/_config.py
 src/mcp_flightrecorder/_inspect_checks.py
 src/mcp_flightrecorder/_inspect_common.py
 src/mcp_flightrecorder/_inspect_diagnostics.py
+src/mcp_flightrecorder/_inspect_gate.py
 src/mcp_flightrecorder/_inspect_navigation.py
 src/mcp_flightrecorder/_inspect_query.py
 src/mcp_flightrecorder/_inspect_records.py
@@ -88,6 +91,7 @@ src/mcp_flightrecorder/_inspect_relations.py
 src/mcp_flightrecorder/_inspect_slice.py
 src/mcp_flightrecorder/_inspect_text.py
 src/mcp_flightrecorder/_logging.py
+src/mcp_flightrecorder/_mcp_inspect.py
 src/mcp_flightrecorder/_recorder.py
 src/mcp_flightrecorder/_snapshot.py
 src/mcp_flightrecorder/_storage.py
@@ -138,17 +142,20 @@ tests/test_inspection_checks.py
 tests/test_inspection_commands.py
 tests/test_inspection_content.py
 tests/test_inspection_diagnostics.py
+tests/test_inspection_gate.py
 tests/test_inspection_inputs.py
 tests/test_inspection_logging.py
 tests/test_inspection_navigation.py
 tests/test_inspection_query.py
 tests/test_inspection_slice.py
 tests/test_inspection_snapshot.py
+tests/test_inspection_snapshot_api.py
 tests/test_integration_fixture.py
 tests/test_integration_history.py
 tests/test_lifecycle_ownership.py
 tests/test_logging.py
 tests/test_mcp_client.py
+tests/test_mcp_inspection.py
 tests/test_openai_chat.py
 tests/test_scale_regressions.py
 tests/test_scope_validation.py

@@ -1,12 +1,12 @@
 # Architecture
 
-**Package 0.5.19 · SQLite schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`**
+**Package 0.5.20 · SQLite schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`**
 
-MCP Flight Recorder captures explicit observations at model, host and MCP boundaries. The host owns native work; the recorder owns bounded capture and its recording. The [HTML map](architecture.html) renders the same implemented behavior offline. [Detailed control flows](#detailed-control-flows) include the source-linked core views plus the integration and diagnosis flow, with closure and snapshot drawn separately. This map covers the responsibilities and material branches of the runtime modules, the schema and build seam; it is not a line-by-line call graph. Public details are in [Easy integration](easy-integration.md), [Capture](capture.md), [Inspection](inspection.md) and [Integrations](integrations.md).
+MCP Flight Recorder captures explicit observations at model, host and MCP boundaries. The host owns native work; the recorder owns bounded capture and its recording. The [HTML map](architecture.html) renders the same implemented behavior offline. [Detailed control flows](#detailed-control-flows) include the source-linked core views plus integration, diagnosis and fixed-file MCP/gate entry paths, with closure and snapshot drawn separately. This map covers the responsibilities and material branches of the runtime modules, the schema and build seam; it is not a line-by-line call graph. Public details are in [Easy integration](easy-integration.md), [Capture](capture.md), [Inspection](inspection.md), [Integrations](integrations.md) and [MCP inspection](mcp-inspection.md).
 
 ## 1. Responsibilities and data flow
 
-The host-owned `AgentRecorder` conversation facade manages explicit selected-attempt bindings over existing capture boundaries. Host observations enter frozen capture preparation through that facade, a thin optional SDK adapter, or the direct `Recorder.observe` / `Recorder.start_operation` API. These paths continue through atomic admission, the capture-time FIFO writer and SQLite. Reader invocations inspect SQLite through separate read-only connections. Snapshot has its own read-only source connection and writes only its private staged copy and new destination.
+The host-owned `AgentRecorder` conversation facade manages explicit selected-attempt bindings over existing capture boundaries. Host observations enter frozen capture preparation through that facade, a thin optional SDK adapter, or the direct `Recorder.observe` / `Recorder.start_operation` API. These paths continue through atomic admission, the capture-time FIFO writer and SQLite. Reader invocations inspect SQLite through separate read-only connections. Snapshot has its own read-only source connection and owns its private staged backup and new destination. SQLite acquisition from a WAL source may create or update source sidecars, including SHM. The optional stdio inspector fixes one portable path and delegates each call to shared readers; the SDK-free gate evaluates one complete run in one owned transaction.
 
 | Layer | Current source | Responsibility |
 |---|---|---|
@@ -19,7 +19,9 @@ The host-owned `AgentRecorder` conversation facade manages explicit selected-att
 | Evidence guards | [`integrations/_common.py`](../src/mcp_flightrecorder/integrations/_common.py), [`integrations/__init__.py`](../src/mcp_flightrecorder/integrations/__init__.py) | SDK-free namespace; label/policy validation, detached JSON copying, single-use evidence claiming and bounded capture failures |
 | Reader | [`inspect.py`](../src/mcp_flightrecorder/inspect.py), [`_inspect_common.py`](../src/mcp_flightrecorder/_inspect_common.py), [`_inspect_records.py`](../src/mcp_flightrecorder/_inspect_records.py), [`_inspect_relations.py`](../src/mcp_flightrecorder/_inspect_relations.py), [`_inspect_checks.py`](../src/mcp_flightrecorder/_inspect_checks.py), [`_inspect_navigation.py`](../src/mcp_flightrecorder/_inspect_navigation.py), [`_inspect_query.py`](../src/mcp_flightrecorder/_inspect_query.py), [`_inspect_slice.py`](../src/mcp_flightrecorder/_inspect_slice.py) | One bounded read transaction and deadline per invocation; shared projections and complete retained-fact counts; static schema metadata needs no connection |
 | Diagnosis and text | [`_inspect_diagnostics.py`](../src/mcp_flightrecorder/_inspect_diagnostics.py), [`_inspect_text.py`](../src/mcp_flightrecorder/_inspect_text.py) | Bounded gaps/location/hints, fully validated selected preparation comparisons, and escaped readable views; no whole-run gate |
-| CLI and copy | [`cli.py`](../src/mcp_flightrecorder/cli.py), [`__main__.py`](../src/mcp_flightrecorder/__main__.py), [`_snapshot.py`](../src/mcp_flightrecorder/_snapshot.py) | Existing JSON commands, opt-in turns/explain text, doctor, explicit latest/run selection and independent portable snapshot utility |
+| Evidence gate | [`_inspect_gate.py`](../src/mcp_flightrecorder/_inspect_gate.py) | Explicit coverage/activity expectations, complete-population validation in one read transaction, and bounded witnesses independent of verdict |
+| Optional MCP inspector | [`_mcp_inspect.py`](../src/mcp_flightrecorder/_mcp_inspect.py) | Fixed stable portable path, five no-content tools, opt-in payload tool, one static schema resource and protocol-only stdout |
+| CLI and copy | [`cli.py`](../src/mcp_flightrecorder/cli.py), [`__main__.py`](../src/mcp_flightrecorder/__main__.py), [`_snapshot.py`](../src/mcp_flightrecorder/_snapshot.py) | Existing JSON commands, opt-in turns/explain text, doctor, explicit latest/run selection and shared public Python/CLI portable snapshot utility |
 | Operational logging | [`_logging.py`](../src/mcp_flightrecorder/_logging.py), component module loggers | Best-effort standard logging with fixed diagnostic fields; handler failures cannot replace capture or inspection outcomes |
 | Storage definition | [`sql/schema.sql`](../sql/schema.sql), [`setup.py`](../setup.py) | One canonical schema copied into the installed package during the build |
 
@@ -188,12 +190,12 @@ Model policy process-control exceptions propagate at request, decision and termi
 
 ### Reader and CLI behavior
 
-Eight existing Python entrypoints retain the inspection contract; `diagnose` adds a separate `mfr.diagnose/1` contract. `fr snapshot` is a separate copy operation; `python -m mcp_flightrecorder` uses the same CLI dispatcher. See [M06](#m06--bounded-read-only-inspection-and-uncertainty).
+The existing readers retain the inspection contract; `diagnose` uses the separate `mfr.diagnose/1` contract. `gate` adds explicit complete-run evidence policy. `inspect.snapshot` / `fr snapshot` share a separate copy operation; `python -m mcp_flightrecorder` uses the same CLI dispatcher. See [M06](#m06--bounded-read-only-inspection-and-uncertainty).
 
 | Python / CLI | Behavior and important branch |
 |---|---|
 | `schema()` / `fr schema` | Static installed contract. Opens no recording. |
-| `runs()` / `fr runs` | Ascending `(started_at, run_id)` pages with one-row lookahead and continuation. Fixed 10-second read budget; no public timeout argument. |
+| `runs()` / `fr runs` | Ascending `(started_at, run_id)` pages with one-row lookahead and continuation. Default 10-second read budget with a public timeout up to 30 seconds. |
 | `find_turns()` / `fr turns` | AND-combined filters, exact retained counts and four positive-witness flags. Cursor binds path, run, filters, output policy and order. Every page is a new snapshot. |
 | `explain()` / `fr explain` | Turn totals and model-call summaries; optional selected-call detail. Input answers and answers produced by selected decisions are separate. Produced occurrences can belong to later turns; unattributed operations stay visible. |
 | `check()` / `fr check` | Nine integrity/availability items: model/host/MCP producer coverage, capture health, artifact storage, request structure, operation lifecycle, links and answer bindings. Overall fail outranks unknown; empty applicable populations may be not applicable. `ok=true` means the read completed, not that checks passed. Tool errors and valid argument/text differences are facts, not automatic integrity failures. |
@@ -201,11 +203,13 @@ Eight existing Python entrypoints retain the inspection contract; `diagnose` add
 | `payload()` / `fr payload` | Explicit retained body only, using intact UTF-8 byte windows and `next_offset`. Unknown/omitted artifacts, invalid offsets and offsets inside a character refuse. `no_content` rejects before access. |
 | `query()` / `fr sql` | One explicit SELECT/WITH; supported scalar parameters/results; SQLite action/function allowlist; row/output/deadline limits and a query-only 8,388,608-byte SQLite value/encoded-row cap after trusted setup. Native too-big errors return `limit_exceeded/sql_value_limit`; successful native NULL stays a row value. No writes, ATTACH or PRAGMA. Unsupported output values refuse; `no_content` rejects before opening. |
 | `diagnose()` / `fr doctor` | One read snapshot, bounded observed gaps and likely corrective hints, explicit event/output cutoffs, and selected preparation comparisons. No whole-run PASS verdict. |
-| `fr snapshot` | Independent read-only source → private backup/finalization/verification → exclusive publication → private cleanup. It preserves source state and capture incompleteness. See M07. |
+| `gate()` / `fr gate` | One transaction evaluates explicit coverage/activity, integrity, complete turns, every answer and tool-call attribution. Status is pass/fail/unknown; bounded witnesses cannot limit evaluation. |
+| `fr mcp` | Optional fixed-file stdio adapter over shared readers; stable portable input required, no automatic acquisition. Content remains explicit opt-in. |
+| `snapshot()` / `fr snapshot` | Independent read-only source → private backup/finalization/verification → exclusive publication → private cleanup. It preserves recorded source state and capture incompleteness; live acquisition can interact with source sidecars. See M07. |
 
 `turns --text` and `explain --text` render the same existing bounded results with machine IDs. `--last` selects the latest matching recorded turn; multi-run selection stays explicit. `doctor` defaults to text and supports `--json`. Its completed read is not a passing evidence gate.
 
-CLI exit status is 0 for successful ordinary commands and passing/not-applicable checks, 2 for a failed check, 4 for an unknown check, 3 for incompatible/unreadable/open-WAL recording errors, 1 for other errors, and 130 for KeyboardInterrupt.
+CLI exit status is 0 for successful ordinary commands and passing/not-applicable checks, 2 for a failed check/gate, 4 for an unknown check/gate, 3 for incompatible/unreadable/open-WAL recording errors, 1 for other errors, and 130 for KeyboardInterrupt.
 
 ### Bounded output and uncertainty
 
@@ -220,7 +224,7 @@ Read operations and envelope construction share a cooperative deadline. Expected
 
 Python and CLI use the same `mfr.inspect/1` envelope, metadata projections, validation order and error codes. Each `run_read` invocation owns a read-only connection, one short transaction and one cooperative deadline. Required complete counts finish inside that transaction; deadlines or storage failures produce errors instead of partial success claims.
 
-For a valid run-scoped CLI command without `--run`, `_infer_run` first performs a separate run-selection read, then `_scoped` invokes the selected reader. These reads have separate transactions and deadlines; for check/find_turns/explain/payload/slice, the selected `timeout` (default 10 seconds, finite positive value up to 30) is forwarded to both. CLI validation precedes run selection. This is a per-read budget, not an end-to-end deadline. With an explicit `--run`, only the selected reader is needed. `fr schema` and Python `schema()` return static metadata without opening a recording. Snapshot has its own connection and deadline management rather than using `run_read`.
+For a valid run-scoped CLI command without `--run`, `_infer_run` first performs a separate run-selection read, then `_scoped` invokes the selected reader. These reads have separate transactions and deadlines; for check/find_turns/explain/payload/slice, the selected `timeout` (default 10 seconds, finite positive value up to 30) is forwarded to both. CLI validation precedes run selection. This is a per-read budget, not an end-to-end deadline. With an explicit `--run`, only the selected reader is needed. `fr schema` and Python `schema()` return static metadata without opening a recording. Gate performs run selection and complete evaluation inside one `run_read` transaction/deadline; it never composes independently opened public readers. Snapshot has its own connection and deadline management rather than using `run_read`.
 
 One Context-owned [`_ReadCache`](../src/mcp_flightrecorder/_inspect_common.py) retains immutable facts within that read snapshot: at most 8 MiB accounted bytes, 4,096 entries and 1 MiB per entry. Run-scoped typed keys distinguish raw and observed event rows, artifacts, relations, answer descriptors and membership minima. Request manifests and oversized entries bypass admission. Output arrays, SQLite buffers and process RSS are separate. Every lookup checks the deadline, including cached misses; each later public call starts fresh.
 
@@ -238,7 +242,7 @@ Within `_turn_facts`, the already-owned `request_info` result is passed as priva
 
 Check aggregates and navigation/explanation totals consume their complete relevant retained populations, including occurrence comparisons and diagnostics, before presentation limits. Those completed totals remain exact for retained facts. Slice and SQL have explicitly bounded traversals/results. A deadline or storage error never promotes a partial aggregate to a successful complete total. Attribution follows explicit identities. Missing observations, invalid bindings, unsupported representations and traversal cutoffs remain visible.
 
-`fr snapshot` independently probes the source read-only and creates its SQLite backup in a private same-parent staging directory. It finalizes, reopens and verifies the staged DELETE database, prepares the result and closes the source **before** creating any public output. A single exclusive hard link publishes the verified main without overwriting a competing file. A sidecar visibly present immediately after link success causes `recording_unreadable/destination_finalize` rather than a false verified-success status, and the published main may already exist; this best-effort observation is not an atomic multi-path lock. Failures/interruption remove only private staging files: **public main and sidecar paths are never cleanup targets**. Snapshot does not use the capture writer or write its source. It preserves source state and does not repair, resume or modify a recording. A portable copy of an incomplete run remains incomplete.
+`inspect.snapshot` / `fr snapshot` share an implementation that probes the source read-only and creates its SQLite backup in a private same-parent staging directory. It finalizes, reopens and verifies the staged DELETE database, prepares the result and closes the source **before** creating any public output. A single exclusive hard link publishes the verified main without overwriting a competing file. A sidecar visibly present immediately after link success causes `recording_unreadable/destination_finalize` rather than a false verified-success status, and the published main may already exist; this best-effort observation is not an atomic multi-path lock. Failures/interruption remove only private staging files: **public main and sidecar paths are never cleanup targets**. Snapshot does not use the capture writer. The backup preserves recorded rows and state and does not intentionally modify source main content or repair/resume a recording. WAL acquisition may create or update source sidecars, including SHM; a byte-for-byte unchanged source fileset is not promised. A portable copy of an incomplete run remains incomplete.
 
 ## 8. Operational logging
 
@@ -258,7 +262,7 @@ The read-only GitHub Actions workflow runs the explicit SDK-free selection on Li
 
 ### Staged publication
 
-The manual `publish.yml` workflow admits main-only `validate-only` or explicit `staged-release` dispatch with a full reviewed commit, version 0.5.19 and planned tag 0.5.19. Both modes require completed successful main-push CI for that exact commit before candidate preparation. Staged release additionally requires that bare tag to exist as an annotated tag at the approved commit. A clean source export builds one original wheel/sdist pair, with package guards, strict Twine, installed smoke and an sdist-rebuilt wheel comparison. Both modes store a flat candidate containing the pair, `manifest.json` and `SHA256SUMS`; source/workflow identity, exact main-push CI and artifact hashes remain bound to the run.
+The manual `publish.yml` workflow admits main-only `validate-only` or explicit `staged-release` dispatch with a full reviewed commit, version 0.5.20 and planned tag 0.5.20. Both modes require completed successful main-push CI for that exact commit before candidate preparation. Staged release additionally requires that bare tag to exist as an annotated tag at the approved commit. A clean source export builds one original wheel/sdist pair, with package guards, strict Twine, installed smoke and an sdist-rebuilt wheel comparison. Both modes store a flat candidate containing the pair, `manifest.json` and `SHA256SUMS`; source/workflow identity, exact main-push CI and artifact hashes remain bound to the run.
 
 Validate-only ends after candidate storage. Staged publication promotes the same bytes through the `testpypi`, `pypi` and `github-release` environments. A release reviewer inspects this run's candidate before TestPyPI approval; PyPI follows TestPyPI download/install verification and a second environment approval. GitHub draft/published-state verification follows PyPI download/install verification. Identity is rechecked after waits. Only proven identical existing files permit partial resume; conflicts stop without deleting, replacing or retagging public state. These are configured release paths, not an observed publication claim. [Releasing](releasing.md) contains exact setup and operator steps.
 
@@ -312,7 +316,7 @@ The terminal `model.response` attempt releases the usage snapshot in `finally`. 
 
 ## 11. Caller-owned integration and diagnosis
 
-`AgentRecorder` construction is inert; explicit start enables a new path, and `path=None` remains disabled. The host starts/closes recording and native clients separately. Coverage names configured boundaries; complete model coverage is an explicit host declaration. Version 0.5.19 adds this facade and diagnosis without a schema migration.
+`AgentRecorder` construction is inert; explicit start enables a new path, and `path=None` remains disabled. The host starts/closes recording and native clients separately. Coverage names configured boundaries; complete model coverage is an explicit host declaration. Version 0.5.19 added this facade and diagnosis without a schema migration.
 
 A conversation owns its bounded ledger across turns. Identity entries retain original messages; explicit stable keys are scoped to that conversation and recorder generation. Conflicts, failed explicit key lookup, restart, overflow and unknown dedicated tool messages cannot become false no-answer declarations. An overloaded role needs the host's predicate. Entry/key/prepared-byte bounds do not limit later growth of caller objects or process RSS. Close releases bindings; there is no global history registry.
 
@@ -322,7 +326,17 @@ Prepared text is detached at bind time and replayed through existing insertion a
 
 Facade development notes are bounded local reason/hint/count records. Normal capture failure preserves host work; strict mode diagnoses integration misuse, while capacity/storage loss never becomes an execution gate. Local notes are not all persisted. Doctor reads only recorded facts through the existing owned read transaction. It reports explicit limits, run counters and event locations without claiming that a page proves complete capture or identifies a unique absent call.
 
-A positive preparation explanation validates same-run authoritative endpoints and ordering, insertion/answer membership, every declared source, and compatible original selected-text tokens. Raw `text_equal`, `text_mismatch`, statistics and inspection-v1 remain unchanged. Unavailable original evidence stays unknown. Matching prepared/submitted text never verifies semantic equivalence. The separate `mfr.diagnose/1` report is not a gate; no MCP inspection server, proxy or automatic storage recovery is implemented here. See [the integration recipes](easy-integration.md) and [diagnostic contract](inspection.md#diagnostic-report-and-preparation).
+A positive preparation explanation validates same-run authoritative endpoints and ordering, insertion/answer membership, every declared source, and compatible original selected-text tokens. Raw `text_equal`, `text_mismatch`, statistics and inspection-v1 remain unchanged. Unavailable original evidence stays unknown. Matching prepared/submitted text never verifies semantic equivalence. The separate `mfr.diagnose/1` report is not a gate. Complete-run policy belongs to `inspect.gate`; the optional MCP server presents bounded readers. No recording proxy or automatic storage recovery is implemented. See [the integration recipes](easy-integration.md) and [diagnostic contract](inspection.md#diagnostic-report-and-preparation).
+
+## 12. Fixed-file MCP inspection and complete-run policy
+
+`fr mcp FILE` lazily imports the optional MCP SDK, validates one operator-selected stable portable file before SQLite access, and exposes exactly five no-content reader tools plus `read_payload` only under `--allow-content`. Its one static resource is `mfr://schema/inspection`. A tool cannot supply a path, SQL, command or output destination. The operator keeps the input stable; WAL/SHM filesets are refused, including a WAL-mode main without accessible sidecars. A portable snapshot whose recorded run remains open is valid input. There is no live-source acquisition or writer-liveness inference.
+
+Every tool delegates to the existing reader with a per-call owned transaction, deadline and encoded JSON budget. The single JSON text block preserves reader cursors, cutoffs and unknowns; the output budget excludes MCP framing. Content opt-in only adds explicit selected payload windows. Metadata tools keep no-content output, which is not anonymization. Metadata, names, labels and retained content remain untrusted potentially sensitive data; host policy determines disclosure. Normal SDK tool errors are bounded and stdout remains protocol-only. No shared mutable database connection is retained between calls.
+
+`inspect.snapshot` and `fr snapshot` use the same independent acquisition path in M07. They can acquire supported live sources, possibly interacting with source SQLite sidecars, then publish a verified portable new destination. The MCP server performs no snapshot implicitly. The gate is likewise not an MCP tool: `inspect.gate` / `fr gate` require explicit model/host coverage, optional MCP coverage, and a positive non-turn activity minimum. One `run_read` transaction selects the run and visits every relevant turn, answer occurrence and tool invocation using shared validators. Required original evidence, complete preparation sources and authoritative attribution cannot be replaced by IDs, retention labels or sampled doctor output.
+
+Gate expectations and observed counts are retained with complete pass/fail/unknown status. Witness samples can shrink without limiting evaluation. A deadline, required-output failure or incomplete evidence cannot pass. A fully recorded tool error is not itself capture failure. Valid preparation does not clear raw mismatch or prove semantic equivalence. This policy checks host-integrated captured evidence, not answer quality or absence of unobserved calls. See [the actual client walkthrough](mcp-inspection.md) and [gate contract](inspection.md#evidence-gate).
 
 ## Detailed control flows
 
@@ -332,7 +346,7 @@ These flows describe component ownership and the implemented admission, persiste
 
 **Entrypoints:** [`Recorder`](../src/mcp_flightrecorder/_recorder.py); [`Writer.run`](../src/mcp_flightrecorder/_storage.py); [`run_read`](../src/mcp_flightrecorder/_inspect_common.py); [`snapshot`](../src/mcp_flightrecorder/_snapshot.py); [`openai_chat.wrap_model`](../src/mcp_flightrecorder/integrations/openai_chat.py), [`anyllm_ollama.wrap_model`](../src/mcp_flightrecorder/integrations/anyllm_ollama.py), [`mcp_client.wrap_mcp`](../src/mcp_flightrecorder/integrations/mcp_client.py), [`mcp_session.wrap_session`](../src/mcp_flightrecorder/integrations/mcp_session.py), [`mcp_session_legacy.wrap_session`](../src/mcp_flightrecorder/integrations/mcp_session_legacy.py).
 
-**Invariants:** The host owns native SDK work and client lifecycle. Optional facades observe native calls; direct Recorder calls bypass the facades. The capture-time writer owns its write connection. Inspection and snapshot use separate read-only source connections. Snapshot writes only a new destination; admission is not durability.
+**Invariants:** The host owns native SDK work and client lifecycle. Optional facades observe native calls; direct Recorder calls bypass the facades. The capture-time writer owns its write connection. Inspection and snapshot use separate read-only source connections. Snapshot publishes a new backup destination; source WAL acquisition may create or update source sidecars. Admission is not durability.
 
 ```mermaid
 flowchart TD
@@ -600,17 +614,17 @@ sequenceDiagram
 
 **Entrypoints:** [`run_read`](../src/mcp_flightrecorder/_inspect_common.py), [`finish_envelope`](../src/mcp_flightrecorder/_inspect_common.py), [`_slice`](../src/mcp_flightrecorder/_inspect_slice.py), [`_check`](../src/mcp_flightrecorder/_inspect_checks.py), [`query`](../src/mcp_flightrecorder/_inspect_query.py), [`cli._dispatch`](../src/mcp_flightrecorder/cli.py).
 
-**Invariants:** Invalid arguments, including timeout, can return a JSON error before opening a connection. One bounded snapshot cache preserves occurrence completeness and diagnostics; eviction of a membership minimum permanently restores the original authority path. Cache bounds are not RSS bounds. Each reader invocation uses its own bounded read-only transaction. Checks distinguish pass/fail/unknown, slices use BFS with frontier/cutoff, and SQL is read-only under validation and an authorizer. Only the SQL route sets the 8,388,608-byte SQLite string/BLOB/encoded-row cap after trusted setup and leading-keyword validation, before caller authorization/preparation. A native too-big error returns `limit_exceeded/sql_value_limit` with no partial data; an expired deadline takes precedence. Successful native NULL stays in rows. Authorization remains active through statement cleanup, followed by rollback/close. This cap is independent of output/cache budgets, does not bound all query allocations or temporary sorting, and does not isolate hostile SQL or bound process RSS. Large stored values may also refuse through `length`/`substr`; other readers and payload prefix access are unchanged. Relationships and omissions remain available, invalid or unknown. Rollback/close applies only if opened. CLI snapshot is independent of `run_read`.
+**Invariants:** Invalid arguments, including timeout, can return a JSON error before opening a connection. One bounded snapshot cache preserves occurrence completeness and diagnostics; eviction of a membership minimum permanently restores the original authority path. Cache bounds are not RSS bounds. Each reader invocation uses its own bounded read-only transaction. Checks distinguish pass/fail/unknown, slices use BFS with frontier/cutoff, and SQL is read-only under validation and an authorizer. Only the SQL route sets the 8,388,608-byte SQLite string/BLOB/encoded-row cap after trusted setup and leading-keyword validation, before caller authorization/preparation. A native too-big error returns `limit_exceeded/sql_value_limit` with no partial data; an expired deadline takes precedence. Successful native NULL stays in rows. Authorization remains active through statement cleanup, followed by rollback/close. This cap is independent of output/cache budgets, does not bound all query allocations or temporary sorting, and does not isolate hostile SQL or bound process RSS. Large stored values may also refuse through `length`/`substr`; other readers and payload prefix access are unchanged. Relationships and omissions remain available, invalid or unknown. Rollback/close applies only if opened. Public Python/CLI snapshot is independent of `run_read`. Gate shares the owned reader transaction and evaluates all relevant records; MCP tools retain per-call ownership and content policy.
 
 ```mermaid
 flowchart TD
-    Call["Python inspection / fr reader command"]
+    Call["Python / fr / MCP reader call"]
     Validate{"Validate input / content policy?"}
     Refuse["Safe JSON error envelope"]
     Open["Open owned read-only connection,<br/>BEGIN and verify schema"]
     Cache["One bounded Context cache<br/>8 MiB / 4096 entries / 1 MiB entry"]
     Select{"Which inspection operation?"}
-    Check["check: pass / fail / unknown"]
+    Check["check / gate: pass / fail / unknown"]
     Slice["slice: bounded BFS;<br/>frontier and cutoff"]
     ValueCap["SQL only: 8,388,608-byte<br/>value / encoded-row cap"]
     SQL["sql: read-only authorization;<br/>prepare and step caller SQL"]
@@ -644,7 +658,7 @@ flowchart TD
 
 **Entrypoints:** [`Recorder.close`](../src/mcp_flightrecorder/_recorder.py), [`Recorder.aclose`](../src/mcp_flightrecorder/_recorder.py), [`Recorder.finalize`](../src/mcp_flightrecorder/_recorder.py), [`Writer._record_closure`](../src/mcp_flightrecorder/_storage.py), [`Writer._finish_storage`](../src/mcp_flightrecorder/_storage.py), [`retry_finalization`](../src/mcp_flightrecorder/_storage.py), [`snapshot`](../src/mcp_flightrecorder/_snapshot.py), [`_check_destination_available`](../src/mcp_flightrecorder/_snapshot.py), [`_publish_staged`](../src/mcp_flightrecorder/_snapshot.py).
 
-**Invariants:** Close waits within a finite budget and can time out while the writer continues. Only joined, verified closure reports portability, not complete capture. The writer records closure and attempts checkpoint/DELETE; retry finalization uses a separate owner after the writer stops. Snapshot probes the source read-only before output checks, then backs up, finalizes, verifies and prepares its response in private same-filesystem staging. An exclusive hard link publishes the complete main file without replacement. Link uncertainty or a visible post-link sidecar can return an error with a public main already present. Cleanup touches only private staging, never public main/sidecars; the post-link check is best effort and source bytes remain unchanged.
+**Invariants:** Close waits within a finite budget and can time out while the writer continues. Only joined, verified closure reports portability, not complete capture. The writer records closure and attempts checkpoint/DELETE; retry finalization uses a separate owner after the writer stops. Snapshot probes the source read-only before output checks, then backs up, finalizes, verifies and prepares its response in private same-filesystem staging. An exclusive hard link publishes the complete main file without replacement. Link uncertainty or a visible post-link sidecar can return an error with a public main already present. Cleanup touches only private staging, never public destination main/sidecars; the post-link check is best effort. The backup preserves recorded rows/state and does not intentionally modify source main content, but WAL acquisition may create or update source sidecars, including SHM.
 
 **Capture closure.** The caller and writer have separate deadlines/ownership.
 
@@ -676,14 +690,14 @@ flowchart TD
         Preflight{"Main or sidecar exists?"}
         Refuse["Initial collision: refuse without public writes"]
         LateRefuse["Publication refused; preserve competitor"]
-        Stage["Private same-parent stage; SQLite sidecars stay here"]
+        Stage["Private same-parent stage; backup sidecars stay here"]
         Backup["SQLite backup; finalize DELETE"]
         VerifyStage{"Verify staged main mode=ro?"}
         Prepare["Prepare envelope; close source;<br/>deadline check"]
         Publish{"Exclusive hard link succeeds?"}
         Sidecar{"Sidecar visible immediately after link?"}
         Uncertain["Publication-uncertain error;<br/>public main may already exist"]
-        Complete["Verified success result;<br/>source unchanged"]
+        Complete["Verified success result;<br/>source rows preserved"]
         Cleanup["Close source if still open;<br/>remove only private stage;<br/>never unlink public names"]
         CleanupOK{"Private cleanup succeeds?"}
         Final["Return prepared success / error"]
@@ -775,4 +789,21 @@ flowchart LR
     Doctor --> Evidence["Validated preparation or explicit unknown; cutoffs visible"]
     Facade --> Unknown["Rejected or ambiguous selection stays unknown"]
     Unknown --> Adapters
+```
+
+### M10 — MCP, snapshot and gate entry paths
+
+**Entrypoints:** [`serve`](../src/mcp_flightrecorder/_mcp_inspect.py), [`inspect.snapshot`](../src/mcp_flightrecorder/inspect.py), [`gate`](../src/mcp_flightrecorder/_inspect_gate.py), [`run_read`](../src/mcp_flightrecorder/_inspect_common.py).
+
+**Invariants:** The operator owns stable input and content permission. MCP calls own separate reader transactions; the gate evaluates its complete population in one transaction. Snapshot owns only private staging and exclusive publication. No path promotes missing, cut-off or timed-out evidence into verified success.
+
+```mermaid
+flowchart LR
+    Fixed["Operator-selected stable portable file"] --> MCP["fr mcp: fixed path; refuse WAL/SHM"]
+    MCP --> Reader["Per-call shared reader;<br/>no content except opt-in payload"]
+    Reader --> Reply["Bounded JSON / tool error;<br/>preserve unknowns and cutoffs"]
+    Live["Source may be live / WAL"] --> Snap["inspect.snapshot / fr snapshot;<br/>private stage and exclusive publication"]
+    Snap --> Portable["Verified new portable copy;<br/>recorded open state preserved"] --> Fixed
+    Expectations["Explicit coverage + activity minima"] --> Gate["inspect.gate / fr gate;<br/>one read transaction, entire population"]
+    Gate --> Verdict["Pass / fail / unknown;<br/>operational errors never pass"]
 ```

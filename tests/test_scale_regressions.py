@@ -967,17 +967,15 @@ def test_scoped_timeout_reaches_both_reads_and_real_cli_defaults(tmp_path, monke
         assert actual == _call_route(route, path, ids, **({} if timeout is None else {"timeout": timeout}))
 
 
-def test_timeout_discovery_preserves_unscoped_sibling_contracts():
+def test_timeout_discovery_matches_public_operation_defaults():
     data = reader.schema()["data"]
-    for name in ("check", "find_turns", "explain", "payload", "slice"):
+    for name in ("runs", "check", "find_turns", "explain", "payload", "slice"):
         assert data["operations"][name]["optional_defaults"]["timeout"] == 10.0
         parameter = signatures.signature(getattr(reader, name)).parameters["timeout"]
         assert parameter.default == 10.0 and parameter.kind == signatures.Parameter.KEYWORD_ONLY
     assert data["limits"]["scoped_reader_timeout"] == {"default": 10.0, "min_exclusive": 0, "max": 30}
     assert data["limits"]["query_snapshot_timeout"] == {"default": 10.0, "min_exclusive": 0, "max": 30}
     assert data["limits"]["db_deadline_seconds"] == 10
-    assert "timeout" not in signatures.signature(reader.runs).parameters
-    assert "timeout" not in data["operations"]["runs"]["optional_defaults"]
     assert data["operations"]["query"]["optional_defaults"]["timeout"] == 10.0
     assert data["operations"]["snapshot"]["optional_defaults"] == {"timeout": 10.0}
 

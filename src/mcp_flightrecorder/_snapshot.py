@@ -115,7 +115,7 @@ def _publish_staged(staged, destination, paths, late_suffixes, ctx):
         )
 
 
-def snapshot(path, output, *, timeout):
+def snapshot(path, output, *, timeout=10.0):
     """Make a verified portable copy and publish its main file without overwrite.
 
     All SQLite writing and verification happen under a private 0700 staging

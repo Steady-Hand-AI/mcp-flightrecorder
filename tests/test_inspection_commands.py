@@ -130,7 +130,7 @@ def test_installed_entrypoint_errors_match_public_python(command_recording, entr
 
 @pytest.mark.parametrize("entry", ["fr", "module"])
 @pytest.mark.parametrize("options,needle", [(["--help"], "snapshot"), (["sql", "--help"], "--params"),
-                                             (["--version"], "0.5.19")], ids=["help", "command-help", "version"])
+                                             (["--version"], "0.5.20")], ids=["help", "command-help", "version"])
 def test_installed_help_and_version_remain_human_text(tmp_path, entry, options, needle):
     process = subprocess.run(_argv(entry) + options, cwd=tmp_path, capture_output=True, text=True, timeout=10)
     check.equal(process.returncode, 0, msg="Explicit help/version is successful human-facing discovery.")
@@ -352,6 +352,6 @@ print(json.dumps({"prefix":sys.prefix,"package":mcp_flightrecorder.__file__,"cli
     for name in ("package", "cli", "reader"):
         check.is_true(Path(observed[name]).resolve().is_relative_to(Path(observed["prefix"]).resolve()),
                       msg="The " + name + " module must come from the installed distribution, never the checkout.")
-    check.equal(observed["version"], "0.5.19", msg="The subprocess exercises this release version.")
+    check.equal(observed["version"], "0.5.20", msg="The subprocess exercises this release version.")
     check.equal(importlib.metadata.version("mcp-flightrecorder"), observed["version"],
                 msg="The direct Python test and isolated CLI probe identify the same installed version.")

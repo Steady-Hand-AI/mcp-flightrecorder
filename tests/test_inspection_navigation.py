@@ -107,17 +107,16 @@ def model_pair(recorder, *, decision=False):
 
 def test_schema_exact_discovery_contract():
     data = success(inspect.schema(), "schema")
-    check.equal(data["package_version"], "0.5.19", msg="Schema names this release version")
+    check.equal(data["package_version"], "0.5.20", msg="Schema names this release version")
     check.equal(data["database_schema_version"], 6, msg="Inspection preserves the accepted database schema")
     check.equal(data["api_format"], "mfr.inspect/1", msg="Discovery advertises the common public envelope format")
-    expected = {"check": "check", "find_turns": "turns", "explain": "explain", "payload": "payload", "slice": "slice", "query": "sql", "runs": "runs", "schema": "schema", "snapshot": "snapshot"}
+    expected = {"check": "check", "find_turns": "turns", "explain": "explain", "payload": "payload", "slice": "slice", "query": "sql", "runs": "runs", "schema": "schema", "snapshot": "snapshot", "gate": "gate"}
     check.equal(set(data["operations"]), set(expected), msg="Discovery promises exactly the assigned readers, helpers and local copy command")
     for name, cli in expected.items():
         item = data["operations"][name]
         check.equal(item["cli"], cli, msg=f"{name} advertises its assigned CLI spelling")
-        check.equal(item["python"], None if name == "snapshot" else name, msg=f"{name} distinguishes public Python readers from CLI-only snapshot")
-        if name != "snapshot":
-            check.is_true(callable(getattr(inspect, name)), msg=f"The advertised public {name} function is installed")
+        check.equal(item["python"], name, msg=f"{name} advertises its public Python entry")
+        check.is_true(callable(getattr(inspect, name)), msg=f"The advertised public {name} function is installed")
     check.equal(data["operations"]["payload"]["optional_defaults"], {"offset": 0, "max_bytes": 4096, "max_output_bytes": 65536, "no_content": False, "timeout": 10.0}, msg="Payload defaults are explicit and match the public signature")
     check.equal(data["operations"]["find_turns"]["optional_defaults"], {"filters": None, "limit": 50, "cursor": None, "max_output_bytes": 65536, "no_content": False, "timeout": 10.0}, msg="Turn pagination defaults agree with the public API")
     check.equal(data["limits"]["max_output_bytes"], {"default": 65536, "min": 1024, "max": 1048576}, msg="Encoded output limits include exact minimum/default/maximum")

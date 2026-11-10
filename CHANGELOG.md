@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.5.20
+
+- Add optional `fr mcp` stdio inspection of one operator-selected stable portable recording, with five metadata tools, one schema resource and explicit payload access only under `--allow-content`.
+- Expose the existing portable-copy implementation as `inspect.snapshot`, sharing the CLI's destination ownership, deadline and result rules.
+- Add `inspect.gate` / `fr gate` with explicit coverage and activity expectations, complete-population evaluation in one read transaction, and distinct pass, fail and unknown outcomes. Reuse validated preparation without changing raw mismatch facts.
+- Add an actual MCP subprocess client walkthrough. Keep core inspection, snapshot and gate SDK-free; preserve capture contracts, SQLite schema 6 and existing inspection behavior.
+
 ## 0.5.19
 
 - Add `AgentRecorder` with caller-owned conversation history, explicit selected attempts, stable replay keys and prepared text snapshots over the existing JSON/OpenAI and modern MCP boundaries. Preserve host selection, native execution, retry and stream ownership.

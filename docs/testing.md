@@ -1,6 +1,6 @@
 # Development and testing
 
-**Package 0.5.18.** Tests exercise an installed wheel and generate mutable recordings under temporary directories. Independent scenario expectations live in ordinary pytest tests.
+**Package 0.5.19.** Tests exercise an installed wheel and generate mutable recordings under temporary directories. Independent scenario expectations live in ordinary pytest tests.
 
 ## 1. Qualify the SDK-free core
 
@@ -36,11 +36,11 @@ chmod 0711 "$work_dir"  # traversal only on this newly created owned ancestor
     "$work_dir/build-env/bin/python" -I -B -m pip install build 'setuptools>=77.0.3' packaging
     "$work_dir/build-env/bin/python" -I -B -m build --no-isolation --wheel --sdist --outdir "$work_dir/dist" "$work_dir/build-source"
     "$mfr_python" -I -B "$work_dir/source/tools/check_package.py" --source "$work_dir/source" \
-        --wheel "$work_dir/dist/mcp_flightrecorder-0.5.18-py3-none-any.whl" \
-        --sdist "$work_dir/dist/mcp_flightrecorder-0.5.18.tar.gz" \
+        --wheel "$work_dir/dist/mcp_flightrecorder-0.5.19-py3-none-any.whl" \
+        --sdist "$work_dir/dist/mcp_flightrecorder-0.5.19.tar.gz" \
         --report "$work_dir/package-check.json"
     "$mfr_python" -m venv "$work_dir/core-env"
-    "$work_dir/core-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.18-py3-none-any.whl"
+    "$work_dir/core-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.19-py3-none-any.whl"
     "$work_dir/core-env/bin/python" -m pip install -r "$work_dir/source/requirements/test.txt"
 )
 "$work_dir/core-env/bin/python" -m pip check
@@ -95,7 +95,7 @@ The **12-module integration selection** runs in a separate fresh environment cre
 
 ```sh
 "$mfr_python" -m venv "$work_dir/integration-env"
-"$work_dir/integration-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.18-py3-none-any.whl"
+"$work_dir/integration-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.19-py3-none-any.whl"
 "$work_dir/integration-env/bin/python" -m pip install -r requirements/test.txt -r requirements/integration.txt
 "$work_dir/integration-env/bin/python" -m pip check
 env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOLOAD -u PYTEST_ADDOPTS PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir" \
@@ -123,7 +123,7 @@ For example, run legacy alone with a new environment:
 
 ```sh
 "$mfr_python" -m venv "$work_dir/legacy-env"
-"$work_dir/legacy-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.18-py3-none-any.whl"
+"$work_dir/legacy-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.19-py3-none-any.whl"
 "$work_dir/legacy-env/bin/python" -m pip install -r requirements/legacy.txt
 "$work_dir/legacy-env/bin/python" -m pip check
 PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir" \
@@ -180,8 +180,8 @@ The command in §1 checks the pristine export and actual distributions. [`tools/
 
 ```sh
 MFR_GUARD_SOURCE="$work_dir/source" \
-MFR_GUARD_WHEEL="$work_dir/dist/mcp_flightrecorder-0.5.18-py3-none-any.whl" \
-MFR_GUARD_SDIST="$work_dir/dist/mcp_flightrecorder-0.5.18.tar.gz" \
+MFR_GUARD_WHEEL="$work_dir/dist/mcp_flightrecorder-0.5.19-py3-none-any.whl" \
+MFR_GUARD_SDIST="$work_dir/dist/mcp_flightrecorder-0.5.19.tar.gz" \
     "$mfr_python" -I -B tools/test_package_guard.py
 ```
 
@@ -218,8 +218,8 @@ After the fresh external build and core setup in §1, create the one current SDK
 ```sh
 "$mfr_python" -I -B -m venv "$work_dir/current-env"
 "$work_dir/current-env/bin/python" -I -B -m pip install -r requirements/test.txt -r requirements/integration.txt 'any-llm-sdk[ollama]>=1.29.0' 'ollama>=0.6.3' 'httpx>=0.28.1'
-"$work_dir/core-env/bin/python" -I -B -m pip install --force-reinstall --no-deps "$work_dir/dist/mcp_flightrecorder-0.5.18-py3-none-any.whl"
-"$work_dir/current-env/bin/python" -I -B -m pip install --force-reinstall --no-deps "$work_dir/dist/mcp_flightrecorder-0.5.18-py3-none-any.whl"
+"$work_dir/core-env/bin/python" -I -B -m pip install --force-reinstall --no-deps "$work_dir/dist/mcp_flightrecorder-0.5.19-py3-none-any.whl"
+"$work_dir/current-env/bin/python" -I -B -m pip install --force-reinstall --no-deps "$work_dir/dist/mcp_flightrecorder-0.5.19-py3-none-any.whl"
 "$work_dir/core-env/bin/python" -I -B -m pip check
 "$work_dir/current-env/bin/python" -I -B -m pip check
 mkdir -p "$work_dir/results/tmp"

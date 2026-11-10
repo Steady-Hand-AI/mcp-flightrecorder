@@ -1,6 +1,6 @@
 # Inspection API and CLI
 
-**Package 0.5.18 · schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`.** Standard-library readers serve Python and the CLI. They expose retained observations, explicit attribution and uncertainty. They do not score agents, write findings, repair recordings or infer provenance.
+**Package 0.5.19 · schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`.** Standard-library readers serve Python and the CLI. They expose retained observations, explicit attribution and uncertainty. They do not score agents, write findings, repair recordings or infer provenance.
 
 ## Start with a readable investigation
 

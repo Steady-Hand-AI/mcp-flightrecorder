@@ -1,6 +1,6 @@
 """A deterministic, SDK-free host using explicit local execution and replay.
 
-Run with an installed source candidate; no API key or network service is used.
+Run with installed mcp-flightrecorder 0.5.19; no API key or network service is used.
 Use the native MCP/OpenAI recipes in docs/easy-integration.md for those clients.
 """
 import argparse

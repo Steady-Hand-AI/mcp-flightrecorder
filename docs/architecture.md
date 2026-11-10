@@ -1,6 +1,6 @@
 # Architecture
 
-**Package 0.5.18 · SQLite schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1` · source additions after 0.5.18**
+**Package 0.5.19 · SQLite schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`**
 
 MCP Flight Recorder captures explicit observations at model, host and MCP boundaries. The host owns native work; the recorder owns bounded capture and its recording. The [HTML map](architecture.html) renders the same implemented behavior offline. [Detailed control flows](#detailed-control-flows) include the source-linked core views plus the integration and diagnosis flow, with closure and snapshot drawn separately. This map covers the responsibilities and material branches of the runtime modules, the schema and build seam; it is not a line-by-line call graph. Public details are in [Easy integration](easy-integration.md), [Capture](capture.md), [Inspection](inspection.md) and [Integrations](integrations.md).
 
@@ -258,7 +258,7 @@ The read-only GitHub Actions workflow runs the explicit SDK-free selection on Li
 
 ### Staged publication
 
-The manual `publish.yml` workflow admits main-only `validate-only` or explicit `staged-release` dispatch with a full reviewed commit, version 0.5.18 and planned tag 0.5.18. Both modes require completed successful main-push CI for that exact commit before candidate preparation. Staged release additionally requires that bare tag to exist as an annotated tag at the approved commit. A clean source export builds one original wheel/sdist pair, with package guards, strict Twine, installed smoke and an sdist-rebuilt wheel comparison. Both modes store a flat candidate containing the pair, `manifest.json` and `SHA256SUMS`; source/workflow identity, exact main-push CI and artifact hashes remain bound to the run.
+The manual `publish.yml` workflow admits main-only `validate-only` or explicit `staged-release` dispatch with a full reviewed commit, version 0.5.19 and planned tag 0.5.19. Both modes require completed successful main-push CI for that exact commit before candidate preparation. Staged release additionally requires that bare tag to exist as an annotated tag at the approved commit. A clean source export builds one original wheel/sdist pair, with package guards, strict Twine, installed smoke and an sdist-rebuilt wheel comparison. Both modes store a flat candidate containing the pair, `manifest.json` and `SHA256SUMS`; source/workflow identity, exact main-push CI and artifact hashes remain bound to the run.
 
 Validate-only ends after candidate storage. Staged publication promotes the same bytes through the `testpypi`, `pypi` and `github-release` environments. A release reviewer inspects this run's candidate before TestPyPI approval; PyPI follows TestPyPI download/install verification and a second environment approval. GitHub draft/published-state verification follows PyPI download/install verification. Identity is rechecked after waits. Only proven identical existing files permit partial resume; conflicts stop without deleting, replacing or retagging public state. These are configured release paths, not an observed publication claim. [Releasing](releasing.md) contains exact setup and operator steps.
 
@@ -312,7 +312,7 @@ The terminal `model.response` attempt releases the usage snapshot in `finally`. 
 
 ## 11. Caller-owned integration and diagnosis
 
-`AgentRecorder` construction is inert; explicit start enables a new path, and `path=None` remains disabled. The host starts/closes recording and native clients separately. Coverage names configured boundaries; complete model coverage is an explicit host declaration. The current source adds this facade and diagnosis without a schema migration; published 0.5.18 predates these additions.
+`AgentRecorder` construction is inert; explicit start enables a new path, and `path=None` remains disabled. The host starts/closes recording and native clients separately. Coverage names configured boundaries; complete model coverage is an explicit host declaration. Version 0.5.19 adds this facade and diagnosis without a schema migration.
 
 A conversation owns its bounded ledger across turns. Identity entries retain original messages; explicit stable keys are scoped to that conversation and recorder generation. Conflicts, failed explicit key lookup, restart, overflow and unknown dedicated tool messages cannot become false no-answer declarations. An overloaded role needs the host's predicate. Entry/key/prepared-byte bounds do not limit later growth of caller objects or process RSS. Close releases bindings; there is no global history registry.
 

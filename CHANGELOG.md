@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.19
+
 - Add `AgentRecorder` with caller-owned conversation history, explicit selected attempts, stable replay keys and prepared text snapshots over the existing JSON/OpenAI and modern MCP boundaries. Preserve host selection, native execution, retry and stream ownership.
 - Add bounded `inspect.diagnose` / `fr doctor`, readable `turns` and `explain` views, and explicit latest-turn selection. Explain validated preparation separately while preserving existing inspection JSON, raw mismatch flags and statistics.
 - Reject recorder use from a foreign process before recorder-owned locks or storage access, and clean up failed construction only when file ownership is established. Keep fresh-worker lifecycle and fresh-path recovery explicit.

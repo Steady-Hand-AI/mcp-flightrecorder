@@ -51,7 +51,7 @@ async def inspect_recording(path: Path, run_id: str | None, allow_content: bool)
         )
         if not report["turns"]["data"]["items"]:
             raise ValueError("This walkthrough needs a recorded raw text mismatch; use tool_roundtrip.py")
-        turn_id = report["turns"]["data"]["items"][0]["turn_id"]
+        turn_id = report["turns"]["data"]["items"][0]["turn"]["turn_id"]
         report["overview"] = await read("explain_turn", run_id=run_id, turn_id=turn_id)
         calls = report["overview"]["data"]["calls"]
         if len(calls) != 2:

@@ -227,7 +227,7 @@ mkdir -p "$work_dir/results/tmp"
 "$work_dir/current-env/bin/python" -I -B -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); s.close()'
 ```
 
-The following focused selection runs nineteen core modules and seven SDK modules from the exported source directory, sequentially with four workers. It covers retention and shared lifecycle behavior; it does not replace the full 22-module core suite in §1 or the 12-module main integration suite in §2. Both commands use normal assertions and the installed pytest/xdist/pytest-check plugins' ordinary autoload. Unset `PYTEST_DISABLE_PLUGIN_AUTOLOAD`; do not also load pytest-check under a second plugin name. Clear `PYTEST_ADDOPTS` so inherited selection, plugin or worker options cannot alter the selection.
+The following focused selection runs 21 core modules and seven SDK modules from the exported source directory, sequentially with four workers. It covers retention and shared lifecycle behavior; it does not replace the full 24-module core suite in §1 or the 13-module main integration suite in §2. Both commands use normal assertions and the installed pytest/xdist/pytest-check plugins' ordinary autoload. Unset `PYTEST_DISABLE_PLUGIN_AUTOLOAD`; do not also load pytest-check under a second plugin name. Clear `PYTEST_ADDOPTS` so inherited selection, plugin or worker options cannot alter the selection.
 
 ```sh
 env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOLOAD -u PYTEST_ADDOPTS PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir/results/tmp" \

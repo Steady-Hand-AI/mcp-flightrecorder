@@ -108,7 +108,7 @@ def _page(ctx, items, ordering, has_more, scope):
     return data, shrink
 
 
-def runs(path, *, limit=50, cursor=None, max_output_bytes=65536, no_content=False):
+def runs(path, *, limit=50, cursor=None, max_output_bytes=65536, no_content=False, timeout=10.0):
     def work(ctx):
         binding = _cursor_scope(ctx, {}, ["started_at", "run_id"])
         last = _read_cursor(cursor, binding)
@@ -121,7 +121,7 @@ def runs(path, *, limit=50, cursor=None, max_output_bytes=65536, no_content=Fals
         items = [run_record(ctx, row, "/items/" + str(index)) for index, row in enumerate(selected)]
         return _page(ctx, items, [(row["started_at"], row["run_id"]) for row in selected], len(raw) > limit, binding)
     return run_read("runs", path, {}, work, max_output_bytes=max_output_bytes, no_content=no_content,
-                    validate=lambda: validate_int(limit, 1, 200, "limit"))
+                    timeout=timeout, validate=lambda: validate_int(limit, 1, 200, "limit"))
 
 
 def _turn_facts(ctx, run_id, turn_id):
@@ -413,11 +413,13 @@ def schema():
         ("payload", "payload", ["path", "run_id", "artifact_id"], {"offset": 0, "max_bytes": 4096, "timeout": 10.0, **common}, "reader"),
         ("slice", "slice", ["path", "run_id", "request_event_id"], {"limit": 1000, "max_depth": 12, "timeout": 10.0, **common}, "reader"),
         ("query", "sql", ["path", "sql"], {"params": None, "limit": 200, "timeout": 10.0, **common}, "reader"),
-        ("runs", "runs", ["path"], {"limit": 50, "cursor": None, **common}, "helper"),
+        ("runs", "runs", ["path"], {"limit": 50, "cursor": None, "timeout": 10.0, **common}, "helper"),
         ("schema", "schema", [], {}, "helper"),
-        ("snapshot", "snapshot", ["path", "output_path"], {"timeout": 10.0}, "local_copy"),
+        ("snapshot", "snapshot", ["path", "output"], {"timeout": 10.0}, "local_copy"),
+        ("gate", "gate", ["path"], {"run_id": None, "expect": None, "min_activity": None,
+                                     "timeout": 10.0, "max_output_bytes": 65536}, "evidence_gate"),
     ]
-    operations = {name: {"python": None if name == "snapshot" else name, "cli": cli, "required": required,
+    operations = {name: {"python": name, "cli": cli, "required": required,
                          "optional_defaults": defaults, "designation": designation}
                   for name, cli, required, defaults, designation in specifications}
     errors = {code: 1 for code in ("invalid_request", "unknown_run", "unknown_turn", "unknown_event", "unknown_artifact",
@@ -436,6 +438,11 @@ def schema():
             "operations": operations, "limits": limits, "errors": errors,
             "check_statuses": {"values": ["pass", "fail", "unknown", "not_applicable"], "reserved": ["warn"],
                                "exits": {"pass": 0, "not_applicable": 0, "unknown": 4, "fail": 2}},
+            "gate_statuses": {"values": ["pass", "fail", "unknown"],
+                              "exits": {"pass": 0, "fail": 2, "unknown": 4},
+                              "required_boundaries": ["model", "host"],
+                              "activity_counts": ["turns", "model_requests", "model_responses", "decisions",
+                                                  "tool_calls", "answer_occurrences"]},
             "expect_boundaries": ["model", "host", "mcp"],
             "content_policy": {"default": "metadata", "explicit_content": ["payload", "query"],
                                "no_content_disables": ["payload", "query"], "conditions_max_bytes": 512, "untrusted_content": True}}

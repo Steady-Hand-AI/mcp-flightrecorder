@@ -1,6 +1,6 @@
 # Development and testing
 
-**Package 0.5.19.** Tests exercise an installed wheel and generate mutable recordings under temporary directories. Independent scenario expectations live in ordinary pytest tests.
+**Package 0.5.20.** Tests exercise an installed wheel and generate mutable recordings under temporary directories. Independent scenario expectations live in ordinary pytest tests.
 
 ## 1. Qualify the SDK-free core
 
@@ -36,11 +36,11 @@ chmod 0711 "$work_dir"  # traversal only on this newly created owned ancestor
     "$work_dir/build-env/bin/python" -I -B -m pip install build 'setuptools>=77.0.3' packaging
     "$work_dir/build-env/bin/python" -I -B -m build --no-isolation --wheel --sdist --outdir "$work_dir/dist" "$work_dir/build-source"
     "$mfr_python" -I -B "$work_dir/source/tools/check_package.py" --source "$work_dir/source" \
-        --wheel "$work_dir/dist/mcp_flightrecorder-0.5.19-py3-none-any.whl" \
-        --sdist "$work_dir/dist/mcp_flightrecorder-0.5.19.tar.gz" \
+        --wheel "$work_dir/dist/mcp_flightrecorder-0.5.20-py3-none-any.whl" \
+        --sdist "$work_dir/dist/mcp_flightrecorder-0.5.20.tar.gz" \
         --report "$work_dir/package-check.json"
     "$mfr_python" -m venv "$work_dir/core-env"
-    "$work_dir/core-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.19-py3-none-any.whl"
+    "$work_dir/core-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.20-py3-none-any.whl"
     "$work_dir/core-env/bin/python" -m pip install -r "$work_dir/source/requirements/test.txt"
 )
 "$work_dir/core-env/bin/python" -m pip check
@@ -55,7 +55,7 @@ cd "$work_dir/source"
 
 ```
 
-Run the following **22-module SDK-free suite** after the build and installation above. It includes the facade, process/lifecycle ownership and diagnostic-reader tests. Six other inspection modules use the real OpenAI/MCP-backed integration recording fixture and run with the native adapter, facade and roundtrip tests in the **separate integration environment** in §2. These full selections match `tools/ci.sh`; do not skip modules or substitute mocked SDKs.
+Run the following **24-module SDK-free suite** after the build and installation above. It includes the facade, process/lifecycle ownership and diagnostic-reader, complete-run gate and public snapshot API tests. Six other inspection modules use the real OpenAI/MCP-backed integration recording fixture and run with the native adapter, facade and roundtrip tests in the **separate integration environment** in §2. These full selections match `tools/ci.sh`; do not skip modules or substitute mocked SDKs.
 
 ```sh
 env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOLOAD -u PYTEST_ADDOPTS PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir" \
@@ -66,11 +66,12 @@ env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOL
     tests/test_easy.py tests/test_lifecycle_ownership.py tests/test_inspection_diagnostics.py \
     tests/test_failures.py tests/test_finalization.py tests/test_fixture.py \
     tests/test_inspection_logging.py tests/test_inspection_query.py \
-    tests/test_inspection_snapshot.py tests/test_logging.py \
+    tests/test_inspection_snapshot.py tests/test_inspection_snapshot_api.py \
+    tests/test_inspection_gate.py tests/test_logging.py \
     tests/test_scope_validation.py tests/test_shutdown.py tests/test_scale_regressions.py
 ```
 
-Check that `mcp_flightrecorder.__file__` points to the installed venv, never `src/`. The SDK-specific adapter/fixture modules are `test_integration_fixture.py`, `test_integration_history.py`, `test_mcp_client.py` and `test_openai_chat.py`; the integration selection also includes `test_easy_sdk.py` and `test_tool_roundtrip.py`. Collection alone does not qualify them.
+Check that `mcp_flightrecorder.__file__` points to the installed venv, never `src/`. The SDK-specific adapter/fixture modules are `test_integration_fixture.py`, `test_integration_history.py`, `test_mcp_client.py` and `test_openai_chat.py`; the integration selection also includes `test_easy_sdk.py`, `test_tool_roundtrip.py` and the genuine stdio client/server `test_mcp_inspection.py`. Collection alone does not qualify them.
 
 The new disposable root's mode `0711` and `umask 022` allow the ordinary-user snapshot-media subprocess to traverse the newly created environment. Its chosen Python executable and all ancestors must also be executable by the ordinary user. A root-run permission case must be permitted to drop UID/GID; otherwise its explicit capability skip records a limitation, **not** a passing case. Never loosen the media-directory permissions that the case is testing, chmod an existing private virtualenv, or convert import/snapshot failures into skips. Use the per-command `TMPDIR` so its media fixture lives below a traversable parent.
 
@@ -87,21 +88,21 @@ recording_dir=$(mktemp -d)
 )
 ```
 
-Snapshot checks require the copied main database to be independently readable, portable and in SQLite DELETE mode. The source must remain byte-identical. A partial quickstart may have unknown coverage; a portable snapshot does not invent complete observations.
+Snapshot checks require the copied main database to be independently readable, portable and in SQLite DELETE mode. The closed portable quickstart source must remain byte-identical. Live acquisition can interact with source SQLite sidecars, including SHM; it does not promise byte-identical live sidecars. A partial quickstart may have unknown coverage; a portable snapshot does not invent complete observations.
 
 ## 2. SDK-specific main tests and optional compatibility environments
 
-The **12-module integration selection** runs in a separate fresh environment created with the same selected interpreter. It comprises four adapter/fixture modules, native facade tests, the complete tool-roundtrip example tests, and six SDK-backed inspection modules. Install the same wheel first, then `requirements/test.txt` together with `requirements/integration.txt` (direct dependencies, resolved by pip):
+The **13-module integration selection** runs in a separate fresh environment created with the same selected interpreter. It comprises four adapter/fixture modules, native facade tests, the complete tool-roundtrip example tests, the MCP stdio inspector, and six SDK-backed inspection modules. Install the same wheel first, then `requirements/test.txt` together with `requirements/integration.txt` (direct dependencies, resolved by pip):
 
 ```sh
 "$mfr_python" -m venv "$work_dir/integration-env"
-"$work_dir/integration-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.19-py3-none-any.whl"
+"$work_dir/integration-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.20-py3-none-any.whl"
 "$work_dir/integration-env/bin/python" -m pip install -r requirements/test.txt -r requirements/integration.txt
 "$work_dir/integration-env/bin/python" -m pip check
 env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOLOAD -u PYTEST_ADDOPTS PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir" \
     "$work_dir/integration-env/bin/python" -I -B -m pytest -n 4 -p no:cacheprovider \
     tests/test_integration_fixture.py tests/test_integration_history.py \
-    tests/test_tool_roundtrip.py \
+    tests/test_tool_roundtrip.py tests/test_mcp_inspection.py \
     tests/test_easy_sdk.py \
     tests/test_mcp_client.py tests/test_openai_chat.py \
     tests/test_inspection_checks.py tests/test_inspection_commands.py \
@@ -123,7 +124,7 @@ For example, run legacy alone with a new environment:
 
 ```sh
 "$mfr_python" -m venv "$work_dir/legacy-env"
-"$work_dir/legacy-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.19-py3-none-any.whl"
+"$work_dir/legacy-env/bin/python" -m pip install "$work_dir/dist/mcp_flightrecorder-0.5.20-py3-none-any.whl"
 "$work_dir/legacy-env/bin/python" -m pip install -r requirements/legacy.txt
 "$work_dir/legacy-env/bin/python" -m pip check
 PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir" \
@@ -151,7 +152,7 @@ PYTHONDONTWRITEBYTECODE=1 "$work_dir/integration-env/bin/python" -m pytest -p no
 
 [`test_tool_roundtrip.py`](../tests/test_tool_roundtrip.py) runs the source-shipped [complete example](tool_roundtrip.md) from outside the source directory against the installed package. Independent transport and tool observations specify its two model requests and single selected tool call. Capture-off, healthy capture and a controlled rejected terminal observation must preserve the same host work. The tests check explicit answer/source/placement evidence, the documented CLI investigation, destination refusal, and host-owned exceptions/cancellation. They do not require a live service or add SDK imports to the core quickstart.
 
-The installed inspection contract is exercised by `test_inspection_commands.py` for API/CLI envelopes and parity; navigation tests for schema/discovery/paging/associations; checks for integrity; slice tests for graph ancestry/caps; content/query tests for payload/SQL/errors; and snapshot tests for portable copying and path/permission failures.
+The installed inspection contract is exercised by `test_inspection_commands.py` for API/CLI envelopes and parity; navigation tests for schema/discovery/paging/associations; checks for integrity; slice tests for graph ancestry/caps; content/query tests for payload/SQL/errors; and snapshot tests for portable copying and path/permission failures. `test_inspection_snapshot_api.py` checks the shared public Python/CLI entry. `test_inspection_gate.py` checks explicit coverage/activity, full-population attribution/comparisons and conservative fail/unknown behavior. `test_mcp_inspection.py` launches the installed subprocess through the genuine SDK and checks discovery, content opt-in, portable input, bounds and useful errors. The [public MCP walkthrough](mcp-inspection.md) exercises the source-shipped client against an installed package.
 
 For manual exploration, use the quickstart and read-only CLI with a new temporary destination (a coverage check on this partial trace is expected to be `unknown`):
 
@@ -180,8 +181,8 @@ The command in §1 checks the pristine export and actual distributions. [`tools/
 
 ```sh
 MFR_GUARD_SOURCE="$work_dir/source" \
-MFR_GUARD_WHEEL="$work_dir/dist/mcp_flightrecorder-0.5.19-py3-none-any.whl" \
-MFR_GUARD_SDIST="$work_dir/dist/mcp_flightrecorder-0.5.19.tar.gz" \
+MFR_GUARD_WHEEL="$work_dir/dist/mcp_flightrecorder-0.5.20-py3-none-any.whl" \
+MFR_GUARD_SDIST="$work_dir/dist/mcp_flightrecorder-0.5.20.tar.gz" \
     "$mfr_python" -I -B tools/test_package_guard.py
 ```
 
@@ -218,8 +219,8 @@ After the fresh external build and core setup in §1, create the one current SDK
 ```sh
 "$mfr_python" -I -B -m venv "$work_dir/current-env"
 "$work_dir/current-env/bin/python" -I -B -m pip install -r requirements/test.txt -r requirements/integration.txt 'any-llm-sdk[ollama]>=1.29.0' 'ollama>=0.6.3' 'httpx>=0.28.1'
-"$work_dir/core-env/bin/python" -I -B -m pip install --force-reinstall --no-deps "$work_dir/dist/mcp_flightrecorder-0.5.19-py3-none-any.whl"
-"$work_dir/current-env/bin/python" -I -B -m pip install --force-reinstall --no-deps "$work_dir/dist/mcp_flightrecorder-0.5.19-py3-none-any.whl"
+"$work_dir/core-env/bin/python" -I -B -m pip install --force-reinstall --no-deps "$work_dir/dist/mcp_flightrecorder-0.5.20-py3-none-any.whl"
+"$work_dir/current-env/bin/python" -I -B -m pip install --force-reinstall --no-deps "$work_dir/dist/mcp_flightrecorder-0.5.20-py3-none-any.whl"
 "$work_dir/core-env/bin/python" -I -B -m pip check
 "$work_dir/current-env/bin/python" -I -B -m pip check
 mkdir -p "$work_dir/results/tmp"
@@ -237,7 +238,8 @@ env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOL
   tests/test_core.py tests/test_deferred.py tests/test_duplicate_transition.py \
   tests/test_failures.py tests/test_finalization.py tests/test_fixture.py \
   tests/test_inspection_logging.py tests/test_inspection_query.py \
-  tests/test_inspection_snapshot.py tests/test_logging.py tests/test_scope_validation.py \
+  tests/test_inspection_snapshot.py tests/test_inspection_snapshot_api.py \
+    tests/test_inspection_gate.py tests/test_logging.py tests/test_scope_validation.py \
   tests/test_shutdown.py tests/test_scale_regressions.py
 
 env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOLOAD -u PYTEST_ADDOPTS PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir/results/tmp" \

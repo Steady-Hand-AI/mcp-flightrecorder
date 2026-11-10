@@ -188,7 +188,7 @@ def _stats(ctx):
     return result
 
 
-def _check(ctx, expect):
+def _check(ctx, expect, *, dispatch_comparisons=True, link_validator=relation_state):
     run = ctx.connection.execute("SELECT * FROM runs WHERE run_id=?", (ctx.run_id,)).fetchone()
     run_data = run_record(ctx, run, "/run")
     items = [_item("coverage." + name, "declaration") for name in ("model", "host", "mcp")]
@@ -219,14 +219,18 @@ def _check(ctx, expect):
     # Reuse request/binding facts before operation-only event rows enter the
     # same bounded LRU. Fixed item positions and their witness order stay intact.
     for link in ctx.connection.execute("SELECT l.* FROM links l LEFT JOIN events w ON w.run_id=l.run_id AND w.event_id=l.witness_event_id WHERE l.run_id=? ORDER BY w.sequence IS NULL,w.sequence,l.link_id", (ctx.run_id,)):
-        status, reason = relation_state(ctx, ctx.run_id, link)
+        status, reason = link_validator(ctx, ctx.run_id, link)
         _count(items[7], status, {"link_id": link["link_id"]}, reason)
     for operation in ctx.connection.execute("SELECT * FROM operations WHERE run_id=? ORDER BY started_at,operation_id", (ctx.run_id,)):
         ctx.check_deadline()
         status, reason = _operation_state(ctx, operation)
         _count(items[6], status, {"operation_id": operation["operation_id"]}, reason)
-    for dispatch in dispatch_rows(ctx, ctx.run_id):
-        stats["forwarded_unknown" if dispatch["forwarded_changed"] is None else "forwarded_changed" if dispatch["forwarded_changed"] else "forwarded_equal"] += 1
+    if dispatch_comparisons:
+        for dispatch in dispatch_rows(ctx, ctx.run_id):
+            stats["forwarded_unknown" if dispatch["forwarded_changed"] is None else "forwarded_changed" if dispatch["forwarded_changed"] else "forwarded_equal"] += 1
+    else:
+        for key in ("forwarded_unknown", "forwarded_changed", "forwarded_equal"):
+            del stats[key]
     for event in ctx.connection.execute("SELECT e.event_id FROM events e LEFT JOIN observed_events o ON o.run_id=e.run_id AND o.event_id=e.event_id WHERE e.run_id=? AND o.event_id IS NULL ORDER BY e.sequence,e.event_id", (ctx.run_id,)):
         ctx.check_deadline()
         ctx.unknown("non_authoritative", ids={"event_id": event["event_id"]}, count=1)

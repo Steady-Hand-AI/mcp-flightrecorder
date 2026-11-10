@@ -7,7 +7,6 @@ from . import __version__
 from . import inspect
 from ._inspect_common import (InspectionError, encode, error_envelope, run_read,
                               validate_id, validate_int, validate_path, validate_timeout)
-from ._snapshot import snapshot
 from ._inspect_diagnostics import FORMAT as DIAGNOSTIC_FORMAT
 from ._inspect_text import render
 
@@ -37,6 +36,7 @@ def _parser():
     _common(runs)
     runs.add_argument("--limit", type=int, default=50)
     runs.add_argument("--cursor")
+    runs.add_argument("--timeout", type=float, default=10.0)
     check = commands.add_parser("check", help="Check integrity and evidence availability.")
     check.add_argument("database")
     _run_options(check)
@@ -92,12 +92,23 @@ def _parser():
     copy.add_argument("database")
     copy.add_argument("output")
     copy.add_argument("--timeout", type=float, default=10.0)
+    gate = commands.add_parser("gate", help="Verify complete host evidence against explicit coverage and activity expectations.")
+    gate.add_argument("database")
+    gate.add_argument("--run")
+    gate.add_argument("--expect", required=True, help="Comma-separated boundaries, including model and host.")
+    for name in ("turns", "model-requests", "model-responses", "decisions", "tool-calls", "answer-occurrences"):
+        gate.add_argument("--min-" + name, type=int)
+    gate.add_argument("--timeout", type=float, default=10.0)
+    gate.add_argument("--max-output-bytes", type=int, default=65_536)
+    mcp = commands.add_parser("mcp", help="Serve one stable portable recording through optional stdio MCP.")
+    mcp.add_argument("database")
+    mcp.add_argument("--allow-content", action="store_true", help="Enable explicit retained-payload reads; other tools still omit bodies.")
     return parser
 
 
 def _operation(command):
     return {"turns": "find_turns", "sql": "query", "doctor": "diagnose"}.get(command, command if command in {
-        "check", "explain", "payload", "slice", "runs", "schema", "snapshot"} else "schema")
+        "check", "explain", "payload", "slice", "runs", "schema", "snapshot", "gate", "mcp"} else "schema")
 
 
 def _expect(value):
@@ -213,10 +224,15 @@ def _dispatch(args):
     if args.command == "schema":
         return inspect.schema()
     if args.command == "snapshot":
-        return snapshot(args.database, args.output, timeout=args.timeout)
+        return inspect.snapshot(args.database, args.output, timeout=args.timeout)
+    if args.command == "gate":
+        names = ("turns", "model_requests", "model_responses", "decisions", "tool_calls", "answer_occurrences")
+        minima = {name: getattr(args, "min_" + name) for name in names if getattr(args, "min_" + name) is not None}
+        return inspect.gate(args.database, args.run, expect=_expect(args.expect), min_activity=minima or None,
+                            timeout=args.timeout, max_output_bytes=args.max_output_bytes)
     common = {"max_output_bytes": args.max_output_bytes, "no_content": args.no_content}
     if args.command == "runs":
-        return inspect.runs(args.database, limit=args.limit, cursor=args.cursor, **common)
+        return inspect.runs(args.database, limit=args.limit, cursor=args.cursor, timeout=args.timeout, **common)
     if args.command == "sql":
         return inspect.query(args.database, args.sql, _params(args.params), limit=args.limit,
                              timeout=args.timeout, **common)
@@ -235,6 +251,11 @@ def _dispatch(args):
 def exit_status(result):
     if not result["ok"]:
         return 3 if result["error"]["code"] in {"incompatible_schema", "recording_unreadable", "recording_open_wal"} else 1
+    if result["operation"] == "gate":
+        data = result["data"]
+        if data.get("status") == "fail":
+            return 2
+        return 0 if data.get("status") == "pass" and data.get("evaluation_complete") is True else 4
     if result["operation"] == "check":
         return {"fail": 2, "unknown": 4}.get(result["data"]["status"], 0)
     return 0
@@ -248,12 +269,19 @@ def main():
     try:
         try:
             args = _parser().parse_args(arguments)
+            if args.command == "mcp":
+                from ._mcp_inspect import serve
+                serve(args.database, allow_content=args.allow_content)
+                return 0
             result = _dispatch(args)
         except (InspectionError, argparse.ArgumentError) as error:
             if isinstance(error, InspectionError):
                 result = error_envelope(operation, error.code, error.reason, error.message)
             else:
                 result = error_envelope(operation, "invalid_request", "invalid_cli", "The command arguments are invalid; use fr --help.")
+        if operation == "mcp":
+            sys.stderr.write(result["error"]["message"] + "\n")
+            return exit_status(result)
         if operation == "diagnose":
             result["format"] = DIAGNOSTIC_FORMAT
         as_text = args is not None and (getattr(args, "text", False) or (args.command == "doctor" and not args.json))

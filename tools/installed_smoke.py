@@ -31,7 +31,7 @@ def main():
     assert any(installed.is_relative_to(Path(p).resolve()) for p in site.getsitepackages())
     assert installed.is_relative_to(Path(sys.prefix).resolve())
     assert not installed.is_relative_to(source)
-    assert mcp_flightrecorder.__version__ == "0.5.20"
+    assert mcp_flightrecorder.__version__ == "0.5.21"
     assert (installed.parent / "schema.sql").read_bytes() == (source / "sql/schema.sql").read_bytes()
     sdks = ("openai", "mcp", "mcp-types", "httpx2")
     if args.profile == "core":
@@ -60,10 +60,27 @@ def main():
         assert result["error"] is None, result
         return result["data"]
 
-    assert run([cli, "--version"], json_output=False) == "mcp-flightrecorder 0.5.20"
+    assert run([cli, "--version"], json_output=False) == "mcp-flightrecorder 0.5.21"
+    proxy_help = subprocess.run([cli, "proxy", "--help"], cwd=output,
+                                capture_output=True, timeout=10)
+    assert proxy_help.returncode == 0 and proxy_help.stdout == b""
+    assert b"--record" in proxy_help.stderr
+    wire = b'{ "jsonrpc": "2.0", "id": "opaque", "extension": [1, 2] }\n'
+    proxy_argv = [cli, "proxy", "--", sys.executable, "-I", "-c",
+                  "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"]
+    forwarded = subprocess.run(proxy_argv, cwd=output, input=wire,
+                               capture_output=True, timeout=10)
+    assert forwarded.returncode == 0 and forwarded.stdout == wire
+    assert forwarded.stderr == b""
+    commands.extend([
+        {"argv": [cli, "proxy", "--help"], "exit": proxy_help.returncode,
+         "stdout_bytes": len(proxy_help.stdout)},
+        {"argv": proxy_argv, "exit": forwarded.returncode,
+         "wire_sha256": hashlib.sha256(forwarded.stdout).hexdigest()},
+    ])
     schema = inspect("schema")
     assert schema["database_schema_version"] == 6
-    assert schema["package_version"] == "0.5.20"
+    assert schema["package_version"] == "0.5.21"
     recording = output / "run.sqlite"
     copy = output / "copy.sqlite"
     created = run([sys.executable, "-I", "-B", str(source / "examples/quickstart.py"), str(recording)], json_output=False)

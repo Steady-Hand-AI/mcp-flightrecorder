@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.5.21
+
+- Add `fr proxy --record FILE -- SERVER_COMMAND ...` for one POSIX stdio client and child, forwarding native bytes unchanged while a separate bounded observer captures selected MCP tool requests and responses.
+- Default proxy recordings to metadata retention, with explicit content opt-in and a forwarding-only mode. Preserve MCP-only coverage without inventing host turns, model decisions or dispatch attribution.
+- Keep capture refusal, observation limits and writer failures separate from native forwarding. Preserve opaque traffic, explicit request IDs, out-of-order results, modern input-required exchanges and legacy reverse traffic, with bounded EOF/interruption cleanup.
+- Add a deterministic server and public recording/inspection walkthrough, including separate metadata and content examples using the existing bounded readers and MCP inspector. Preserve schema 6 and zero core dependencies.
+
 ## 0.5.20
 
 - Add optional `fr mcp` stdio inspection of one operator-selected stable portable recording, with five metadata tools, one schema resource and explicit payload access only under `--allow-content`.

@@ -163,23 +163,26 @@ def _turn_facts(ctx, run_id, turn_id):
             "counts": counts, "flags": flags}
 
 
-def find_turns(path, run_id, *, filters=None, limit=50, cursor=None, max_output_bytes=65536, no_content=False, timeout=10.0):
+def find_turns(path, run_id, *, filters=None, limit=50, cursor=None, max_output_bytes=65536, no_content=False, timeout=10.0, last=False):
     normalized = {}
     def validate():
         validate_int(limit, 1, 200, "limit")
+        if type(last) is not bool or (last and cursor is not None):
+            invalid("invalid_last", "last must be a boolean and cannot be combined with a cursor.")
         normalized.update(_filters(filters))
 
     def work(ctx):
         binding = _cursor_scope(ctx, normalized, ["started_at", "turn_id"])
-        last = _read_cursor(cursor, binding)
+        previous = _read_cursor(cursor, binding)
         statement, params = "SELECT * FROM turns WHERE run_id=?", [run_id]
-        if last is not None:
+        if previous is not None:
             statement += " AND (started_at,turn_id)>(?,?)"
-            params.extend(last)
+            params.extend(previous)
         for name in sorted(STRING_FILTERS & normalized.keys()):
             statement += " AND " + name + "=?"
             params.append(normalized[name])
-        raw = ctx.connection.execute(statement + " ORDER BY started_at,turn_id", params)
+        order = " ORDER BY started_at DESC,turn_id DESC" if last else " ORDER BY started_at,turn_id"
+        raw = ctx.connection.execute(statement + order, params)
         selected = []
         try:
             for row in raw:
@@ -188,6 +191,8 @@ def find_turns(path, run_id, *, filters=None, limit=50, cursor=None, max_output_
                 if any(facts["flags"][name] != normalized[name] for name in FLAG_NAMES if name in normalized):
                     continue
                 selected.append((row, facts))
+                if last:
+                    break
                 if len(selected) > limit:
                     break
         finally:

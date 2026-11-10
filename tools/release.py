@@ -92,7 +92,7 @@ def build_candidate(repo, work, identity):
     extracted.mkdir()
     with tarfile.open(dist / SDIST) as archive:
         archive.extractall(extracted, filter="data")
-    sdist_source = extracted / "mcp_flightrecorder-0.5.18"
+    sdist_source = extracted / "mcp_flightrecorder-0.5.19"
     rebuilt = work / "rebuilt"
     run("sdist-build", [python, "-I", "-B", "-m", "build", "--no-isolation", "--wheel", "--outdir", rebuilt, sdist_source], work)
     run("rebuilt-guard", [python, "-I", "-B", guard, "--source", source, "--wheel", rebuilt / WHEEL,

@@ -31,7 +31,7 @@ def main():
     assert any(installed.is_relative_to(Path(p).resolve()) for p in site.getsitepackages())
     assert installed.is_relative_to(Path(sys.prefix).resolve())
     assert not installed.is_relative_to(source)
-    assert mcp_flightrecorder.__version__ == "0.5.18"
+    assert mcp_flightrecorder.__version__ == "0.5.19"
     assert (installed.parent / "schema.sql").read_bytes() == (source / "sql/schema.sql").read_bytes()
     sdks = ("openai", "mcp", "mcp-types", "httpx2")
     if args.profile == "core":
@@ -60,10 +60,10 @@ def main():
         assert result["error"] is None, result
         return result["data"]
 
-    assert run([cli, "--version"], json_output=False) == "mcp-flightrecorder 0.5.18"
+    assert run([cli, "--version"], json_output=False) == "mcp-flightrecorder 0.5.19"
     schema = inspect("schema")
     assert schema["database_schema_version"] == 6
-    assert schema["package_version"] == "0.5.18"
+    assert schema["package_version"] == "0.5.19"
     recording = output / "run.sqlite"
     copy = output / "copy.sqlite"
     created = run([sys.executable, "-I", "-B", str(source / "examples/quickstart.py"), str(recording)], json_output=False)
@@ -86,6 +86,22 @@ def main():
         connection.close()
     assert hashlib.sha256(recording.read_bytes()).hexdigest() == original_hash
     assert all(not Path(str(copy) + suffix).exists() for suffix in ("-wal", "-shm", "-journal"))
+    facade_recording = output / "agent.sqlite"
+    facade_result = run([sys.executable, "-I", "-B", str(source / "examples/agent_recorder.py"),
+                         "--output", str(facade_recording)])
+    assert facade_result == {"answer": "alpha", "recording": str(facade_recording)}
+    disabled_path = output / "disabled.sqlite"
+    disabled_result = run([sys.executable, "-I", "-B", str(source / "examples/agent_recorder.py"),
+                           "--output", str(disabled_path), "--disabled"])
+    assert disabled_result == {"answer": "alpha", "recording": None}
+    assert not disabled_path.exists()
+    diagnosis = run([cli, "doctor", str(facade_recording), "--json"])
+    assert diagnosis["ok"] and diagnosis["format"] == "mfr.diagnose/1"
+    assert diagnosis["data"]["whole_run_verdict"] == "not_evaluated"
+    assert run([cli, "doctor", str(facade_recording)], json_output=False)
+    assert run([cli, "turns", str(facade_recording), "--last", "--text"], json_output=False)
+    assert run([cli, "explain", str(facade_recording), "--last", "--text"], json_output=False)
+    assert len(inspect("turns", str(facade_recording))["items"]) == 2
     report = {
         "result": "PASS", "python": sys.version, "executable": sys.executable,
         "sqlite": sqlite3.sqlite_version, "installed_module": str(installed),

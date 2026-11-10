@@ -1,15 +1,16 @@
 # Architecture
 
-**Package 0.5.18 · SQLite schema 6 · inspection format `mfr.inspect/1` · updated 9 November 2026**
+**Package 0.5.19 · SQLite schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`**
 
-MCP Flight Recorder captures explicit observations at model, host and MCP boundaries. The host owns native work; the recorder owns bounded capture and its recording. The [HTML map](architecture.html) renders the same implemented behavior offline. [Detailed control flows](#detailed-control-flows) contain nine source-linked views, with closure and snapshot drawn separately. This map covers the responsibilities and material branches of all 31 runtime modules, the schema and build seam; it is not a line-by-line call graph. Public details are in [Capture](capture.md), [Inspection](inspection.md) and [Integrations](integrations.md).
+MCP Flight Recorder captures explicit observations at model, host and MCP boundaries. The host owns native work; the recorder owns bounded capture and its recording. The [HTML map](architecture.html) renders the same implemented behavior offline. [Detailed control flows](#detailed-control-flows) include the source-linked core views plus the integration and diagnosis flow, with closure and snapshot drawn separately. This map covers the responsibilities and material branches of the runtime modules, the schema and build seam; it is not a line-by-line call graph. Public details are in [Easy integration](easy-integration.md), [Capture](capture.md), [Inspection](inspection.md) and [Integrations](integrations.md).
 
 ## 1. Responsibilities and data flow
 
-Host observations enter frozen capture preparation through either a thin optional SDK facade or the direct `Recorder.observe` / `Recorder.start_operation` API. Both paths continue through atomic admission, the capture-time FIFO writer and SQLite. Reader invocations inspect SQLite through separate read-only connections. Snapshot has its own read-only source connection and writes only its private staged copy and new destination.
+The host-owned `AgentRecorder` conversation facade manages explicit selected-attempt bindings over existing capture boundaries. Host observations enter frozen capture preparation through that facade, a thin optional SDK adapter, or the direct `Recorder.observe` / `Recorder.start_operation` API. These paths continue through atomic admission, the capture-time FIFO writer and SQLite. Reader invocations inspect SQLite through separate read-only connections. Snapshot has its own read-only source connection and writes only its private staged copy and new destination.
 
 | Layer | Current source | Responsibility |
 |---|---|---|
+| Host integration | [`easy.py`](../src/mcp_flightrecorder/easy.py) | Inert configuration, caller-owned conversations, bounded identity/key bindings, explicit attempts and prepared replay; host owns execution |
 | Public capture | [`__init__.py`](../src/mcp_flightrecorder/__init__.py), [`_recorder.py`](../src/mcp_flightrecorder/_recorder.py), [`_types.py`](../src/mcp_flightrecorder/_types.py), [`_config.py`](../src/mcp_flightrecorder/_config.py) | Public imports, scope, receipts, admission, bounded health and shutdown |
 | Capture preparation | [`_capture.py`](../src/mcp_flightrecorder/_capture.py), [`_artifacts.py`](../src/mcp_flightrecorder/_artifacts.py), [`_values.py`](../src/mcp_flightrecorder/_values.py) | Normalize optional response usage before freezing facts; prepare ordinary JSON, envelopes, projections, retention and request manifests |
 | Writer and finalization | [`_storage.py`](../src/mcp_flightrecorder/_storage.py) | Capture-time write-connection ownership, FIFO transactions, identities and reservation release; a post-stop finalization retry owns a separate connection |
@@ -17,7 +18,8 @@ Host observations enter frozen capture preparation through either a thin optiona
 | MCP adapters | [`mcp_client.py`](../src/mcp_flightrecorder/integrations/mcp_client.py), [`mcp_session.py`](../src/mcp_flightrecorder/integrations/mcp_session.py), [`mcp_session_legacy.py`](../src/mcp_flightrecorder/integrations/mcp_session_legacy.py), [`_mcp_capture.py`](../src/mcp_flightrecorder/integrations/_mcp_capture.py), [`_mcp_native.py`](../src/mcp_flightrecorder/integrations/_mcp_native.py) | Version-specific native translation around one shared operation lifecycle and optional MCP body policy |
 | Evidence guards | [`integrations/_common.py`](../src/mcp_flightrecorder/integrations/_common.py), [`integrations/__init__.py`](../src/mcp_flightrecorder/integrations/__init__.py) | SDK-free namespace; label/policy validation, detached JSON copying, single-use evidence claiming and bounded capture failures |
 | Reader | [`inspect.py`](../src/mcp_flightrecorder/inspect.py), [`_inspect_common.py`](../src/mcp_flightrecorder/_inspect_common.py), [`_inspect_records.py`](../src/mcp_flightrecorder/_inspect_records.py), [`_inspect_relations.py`](../src/mcp_flightrecorder/_inspect_relations.py), [`_inspect_checks.py`](../src/mcp_flightrecorder/_inspect_checks.py), [`_inspect_navigation.py`](../src/mcp_flightrecorder/_inspect_navigation.py), [`_inspect_query.py`](../src/mcp_flightrecorder/_inspect_query.py), [`_inspect_slice.py`](../src/mcp_flightrecorder/_inspect_slice.py) | One bounded read transaction and deadline per invocation; shared projections and complete retained-fact counts; static schema metadata needs no connection |
-| CLI and copy | [`cli.py`](../src/mcp_flightrecorder/cli.py), [`__main__.py`](../src/mcp_flightrecorder/__main__.py), [`_snapshot.py`](../src/mcp_flightrecorder/_snapshot.py) | JSON commands over the reader, a separate run-selection read when needed, and an independent portable snapshot utility |
+| Diagnosis and text | [`_inspect_diagnostics.py`](../src/mcp_flightrecorder/_inspect_diagnostics.py), [`_inspect_text.py`](../src/mcp_flightrecorder/_inspect_text.py) | Bounded gaps/location/hints, fully validated selected preparation comparisons, and escaped readable views; no whole-run gate |
+| CLI and copy | [`cli.py`](../src/mcp_flightrecorder/cli.py), [`__main__.py`](../src/mcp_flightrecorder/__main__.py), [`_snapshot.py`](../src/mcp_flightrecorder/_snapshot.py) | Existing JSON commands, opt-in turns/explain text, doctor, explicit latest/run selection and independent portable snapshot utility |
 | Operational logging | [`_logging.py`](../src/mcp_flightrecorder/_logging.py), component module loggers | Best-effort standard logging with fixed diagnostic fields; handler failures cannot replace capture or inspection outcomes |
 | Storage definition | [`sql/schema.sql`](../sql/schema.sql), [`setup.py`](../setup.py) | One canonical schema copied into the installed package during the build |
 
@@ -35,7 +37,9 @@ Scope is captured when a wrapper is invoked and retained through deferred execut
 
 `Recorder` creates a new recording. It validates explicit `capture="content"` or `"metadata"`, boolean comparisons, declared model/host/MCP producer IDs, detached environment JSON and supported positive limits. A boundary with a null producer cannot emit observations; `model_complete=True` requires a model producer. These declarations describe intended coverage, not proof that every real-world action was observed.
 
-The parent directory must exist. The writer refuses an existing main, WAL, SHM or journal path, reserves a new mode-0600 main exclusively, installs schema 6 and commits the initial run before constructor readiness. Initialization failure raises; observation failures after initialization use capture receipts and health. There is no append/reopen or migration runner.
+The parent directory must exist. The writer refuses an existing main, WAL, SHM or journal path, reserves a new mode-0600 main exclusively, installs schema 6 and commits the initial run before constructor readiness. Initialization failure closes owned handles and removes only files still proven to belong to that failed initialization; pre-existing, replaced, valid or ownership-uncertain files are retained with an actionable error. Observation failures after initialization use capture receipts and health. There is no append/reopen or migration runner.
+
+A creator-process check precedes recorder-owned locks, logging and storage access on capture, retained handles, health and shutdown. Foreign-process use cannot finalize the parent recording. This is defensive rejection, not threaded-fork safety; start a fresh recorder inside an already-created worker.
 
 The recorder's `ContextVar` holds a private `_AmbientScope` frame or `None`; public `CaptureScope` values remain sealed and immutable. A frame's scope and predecessor are fixed at installation. `capture_scope` uses `_current_scope_frame` to skip only a `foreign_closed` prefix, stopping at the first live frame or `None` and updating only the caller's context when needed. A live descendant, disabled turn or rejected dispatch stops traversal. At `None`, the lookup issues the normal sealed unscoped value without installing a frame.
 
@@ -184,7 +188,7 @@ Model policy process-control exceptions propagate at request, decision and termi
 
 ### Reader and CLI behavior
 
-Eight Python reader entrypoints share the inspection contract. `fr snapshot` is a separate copy operation; `python -m mcp_flightrecorder` uses the same CLI dispatcher. See [M06](#m06--bounded-read-only-inspection-and-uncertainty).
+Eight existing Python entrypoints retain the inspection contract; `diagnose` adds a separate `mfr.diagnose/1` contract. `fr snapshot` is a separate copy operation; `python -m mcp_flightrecorder` uses the same CLI dispatcher. See [M06](#m06--bounded-read-only-inspection-and-uncertainty).
 
 | Python / CLI | Behavior and important branch |
 |---|---|
@@ -196,7 +200,10 @@ Eight Python reader entrypoints share the inspection contract. `fr snapshot` is 
 | `slice()` / `fr slice` | Authoritative request root, bounded breadth-first ancestry through explicit relations/operation identities, deduplication and context-only witnesses. Root is preserved; missing evidence and record/depth/pending/output limits remain in frontier/cutoffs. `complete` concerns ancestry/traversal; unknown text comparison can coexist with complete structural ancestry. |
 | `payload()` / `fr payload` | Explicit retained body only, using intact UTF-8 byte windows and `next_offset`. Unknown/omitted artifacts, invalid offsets and offsets inside a character refuse. `no_content` rejects before access. |
 | `query()` / `fr sql` | One explicit SELECT/WITH; supported scalar parameters/results; SQLite action/function allowlist; row/output/deadline limits and a query-only 8,388,608-byte SQLite value/encoded-row cap after trusted setup. Native too-big errors return `limit_exceeded/sql_value_limit`; successful native NULL stays a row value. No writes, ATTACH or PRAGMA. Unsupported output values refuse; `no_content` rejects before opening. |
+| `diagnose()` / `fr doctor` | One read snapshot, bounded observed gaps and likely corrective hints, explicit event/output cutoffs, and selected preparation comparisons. No whole-run PASS verdict. |
 | `fr snapshot` | Independent read-only source → private backup/finalization/verification → exclusive publication → private cleanup. It preserves source state and capture incompleteness. See M07. |
+
+`turns --text` and `explain --text` render the same existing bounded results with machine IDs. `--last` selects the latest matching recorded turn; multi-run selection stays explicit. `doctor` defaults to text and supports `--json`. Its completed read is not a passing evidence gate.
 
 CLI exit status is 0 for successful ordinary commands and passing/not-applicable checks, 2 for a failed check, 4 for an unknown check, 3 for incompatible/unreadable/open-WAL recording errors, 1 for other errors, and 130 for KeyboardInterrupt.
 
@@ -247,11 +254,11 @@ The source tree contains current library modules, short end-user examples, test-
 
 A committed tree is exported into a pristine directory and checked against `tools/public_files.txt`. A separate build copy produces the wheel and sdist; `tools/check_package.py` validates their actual members, metadata, license files and schema against that source. Temporary negative controls exercise refusals without entering the repository. Fresh virtual environments install the wheel normally, and smoke checks verify the import origin before using the CLI and public API outside the source tree. A fresh sdist extraction is rebuilt and installed to check source completeness.
 
-The read-only GitHub Actions workflow runs the 19-module SDK-free selection on Linux CPython 3.11 and 3.14, plus the separate eleven-module main integration selection on CPython 3.14. Each suite has its own environment and four workers. The core 3.11 job also rebuilds and installs the sdist. These are configured checks, not a claim of observed hosted success; the workflow does not publish artifacts or packages. [Testing](testing.md#4-source-package-hygiene) documents the commands and limits.
+The read-only GitHub Actions workflow runs the explicit SDK-free selection on Linux CPython 3.11 and 3.14, plus the separate main integration selection on CPython 3.14. Each suite has its own environment and four workers. The core 3.11 job also rebuilds and installs the sdist. These are configured checks, not a claim of observed hosted success; the workflow does not publish artifacts or packages. [Testing](testing.md#4-source-package-hygiene) documents the commands and limits.
 
 ### Staged publication
 
-The manual `publish.yml` workflow admits main-only `validate-only` or explicit `staged-release` dispatch with a full reviewed commit, version 0.5.18 and planned tag 0.5.18. Both modes require completed successful main-push CI for that exact commit before candidate preparation. Staged release additionally requires that bare tag to exist as an annotated tag at the approved commit. A clean source export builds one original wheel/sdist pair, with package guards, strict Twine, installed smoke and an sdist-rebuilt wheel comparison. Both modes store a flat candidate containing the pair, `manifest.json` and `SHA256SUMS`; source/workflow identity, exact main-push CI and artifact hashes remain bound to the run.
+The manual `publish.yml` workflow admits main-only `validate-only` or explicit `staged-release` dispatch with a full reviewed commit, version 0.5.19 and planned tag 0.5.19. Both modes require completed successful main-push CI for that exact commit before candidate preparation. Staged release additionally requires that bare tag to exist as an annotated tag at the approved commit. A clean source export builds one original wheel/sdist pair, with package guards, strict Twine, installed smoke and an sdist-rebuilt wheel comparison. Both modes store a flat candidate containing the pair, `manifest.json` and `SHA256SUMS`; source/workflow identity, exact main-push CI and artifact hashes remain bound to the run.
 
 Validate-only ends after candidate storage. Staged publication promotes the same bytes through the `testpypi`, `pypi` and `github-release` environments. A release reviewer inspects this run's candidate before TestPyPI approval; PyPI follows TestPyPI download/install verification and a second environment approval. GitHub draft/published-state verification follows PyPI download/install verification. Identity is rechecked after waits. Only proven identical existing files permit partial resume; conflicts stop without deleting, replacing or retagging public state. These are configured release paths, not an observed publication claim. [Releasing](releasing.md) contains exact setup and operator steps.
 
@@ -302,6 +309,20 @@ Only the OpenAI factory exposes `record_usage=False`, validated as an exact Bool
 For streams, `StreamCapture.consume` checks for usage after the finished-call guard and before body/selection cutoff returns. Explicit empty `choices` plus non-null usage identifies an eligible aggregate. Its entire normalized snapshot replaces the previous snapshot, including nulls. Other chunks do not erase it; arbitrary content-chunk usage is not treated as final. Late host-consumed aggregates remain observable after capture cutoffs without reopening stopped body or tool capture. Nothing sums, merges or maximizes counts, injects provider options, prefetches or drains. The host must request `stream_options={"include_usage": True}`, consume the aggregate and own cleanup; its empty choices make unconditional `chunk.choices[0]` unsafe.
 
 The terminal `model.response` attempt releases the usage snapshot in `finally`. With `record_usage=True`, core writes the normalized counts to `details_json.usage`. If the call has no usage snapshot, all three counts are null. With the default `record_usage=False`, the adapter omits `details_json.usage`. A provider response body retained under the configured content policy can contain native usage with either setting. Counts survive body replacement, omission, metadata capture and an independent projection failure. They remain potentially sensitive provider reports, not verified bills or cache causes. The [documented `fr sql` recipe](integrations.md#inspect-recorded-usage-with-fr-sql) orders observed response events in a selected finalized run or fixed snapshot, preserves distinct events and unknown fields, and computes a guarded read fraction rather than monetary savings.
+
+## 11. Caller-owned integration and diagnosis
+
+`AgentRecorder` construction is inert; explicit start enables a new path, and `path=None` remains disabled. The host starts/closes recording and native clients separately. Coverage names configured boundaries; complete model coverage is an explicit host declaration. Version 0.5.19 adds this facade and diagnosis without a schema migration.
+
+A conversation owns its bounded ledger across turns. Identity entries retain original messages; explicit stable keys are scoped to that conversation and recorder generation. Conflicts, failed explicit key lookup, restart, overflow and unknown dedicated tool messages cannot become false no-answer declarations. An overloaded role needs the host's predicate. Entry/key/prepared-byte bounds do not limit later growth of caller objects or process RSS. Close releases bindings; there is no global history registry.
+
+The host selects from native responses. A choice's short answer form requires exactly one attempted invocation; retries/fan-out use the selected inner attempt, including rejected capture. Native execution, retries, alternatives, values, exceptions and cancellation remain host-owned. Missing MCP capture never creates a synthetic local operation. Explicit local call/acall captures a host result with model association but no MCP raw-result comparison; explicit host-initiated dispatch without a model decision leaves answer attribution unknown.
+
+Prepared text is detached at bind time and replayed through existing insertion annotations without mutating the host message. Supported text only; unavailable/unsupported snapshots retain diagnostics and uncertainty. Metadata omission and per-observation retention remain distinct. A retention callback covers model/MCP/host-result payloads, not core turn prompts or dispatch arguments. SDK streaming reuses existing consumed-stream ownership and cleanup.
+
+Facade development notes are bounded local reason/hint/count records. Normal capture failure preserves host work; strict mode diagnoses integration misuse, while capacity/storage loss never becomes an execution gate. Local notes are not all persisted. Doctor reads only recorded facts through the existing owned read transaction. It reports explicit limits, run counters and event locations without claiming that a page proves complete capture or identifies a unique absent call.
+
+A positive preparation explanation validates same-run authoritative endpoints and ordering, insertion/answer membership, every declared source, and compatible original selected-text tokens. Raw `text_equal`, `text_mismatch`, statistics and inspection-v1 remain unchanged. Unavailable original evidence stays unknown. Matching prepared/submitted text never verifies semantic equivalence. The separate `mfr.diagnose/1` report is not a gate; no MCP inspection server, proxy or automatic storage recovery is implemented here. See [the integration recipes](easy-integration.md) and [diagnostic contract](inspection.md#diagnostic-report-and-preparation).
 
 ## Detailed control flows
 
@@ -734,4 +755,24 @@ flowchart TD
     Same -->|yes| Normalize --> Return
     Same -->|no| Other --> Return
     Mark -.->|origin repairs on lookup| Lookup --> Stop
+```
+
+### M09 — Caller-owned integration and bounded diagnosis
+
+**Entrypoints:** [`AgentRecorder`, `Conversation`, selected attempt handles](../src/mcp_flightrecorder/easy.py); [`diagnose`](../src/mcp_flightrecorder/_inspect_diagnostics.py); [`text renderer`](../src/mcp_flightrecorder/_inspect_text.py).
+
+**Invariants:** The host selects and executes native work. One conversation owns replay bindings; one selected attempt identifies one actual invocation. Rejected or ambiguous evidence remains unknown. Existing admission/writer ownership is unchanged. Doctor evaluates selected preparation sources completely within its read deadline but does not convert its bounded event page into a whole-run verdict. Creator-process rejection precedes recorder-owned locks and I/O; failed initialization cleanup requires proven ownership.
+
+```mermaid
+flowchart LR
+    Host["Host owns native work, selection and lifecycle"] --> Facade["Conversation and selected attempt"]
+    Facade --> Ledger["Bounded identity/key ledger and prepared snapshot"]
+    Facade --> Adapters["Existing JSON, SDK and explicit local boundaries"]
+    Ledger --> Adapters
+    Adapters --> Core["Existing admission and single writer"]
+    Core --> DB[("SQLite schema 6")]
+    DB --> Doctor["One bounded diagnostic read"]
+    Doctor --> Evidence["Validated preparation or explicit unknown; cutoffs visible"]
+    Facade --> Unknown["Rejected or ambiguous selection stays unknown"]
+    Unknown --> Adapters
 ```

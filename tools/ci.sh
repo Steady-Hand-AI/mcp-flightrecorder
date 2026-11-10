@@ -42,8 +42,8 @@ cp -R "$source_dir" "$work/build-source"
 build_python="$work/build-env/bin/python"
 "$build_python" -I -B -m pip install build 'setuptools>=77.0.3' packaging
 "$build_python" -I -B -m build --no-isolation --wheel --sdist --outdir "$work/dist" "$work/build-source"
-wheel="$work/dist/mcp_flightrecorder-0.5.18-py3-none-any.whl"
-sdist="$work/dist/mcp_flightrecorder-0.5.18.tar.gz"
+wheel="$work/dist/mcp_flightrecorder-0.5.19-py3-none-any.whl"
+sdist="$work/dist/mcp_flightrecorder-0.5.19.tar.gz"
 "$python" -I -B "$source_dir/tools/check_package.py" --source "$source_dir" --wheel "$wheel" --sdist "$sdist" --report "$work/package-report.json"
 MFR_GUARD_SOURCE="$source_dir" MFR_GUARD_WHEEL="$wheel" MFR_GUARD_SDIST="$sdist" \
     "$python" -I -B "$source_dir/tools/test_package_guard.py"
@@ -68,6 +68,7 @@ if [[ "$profile" == core ]]; then
         tests/test_admission.py tests/test_async_shutdown.py tests/test_bindings.py
         tests/test_capture_values.py tests/test_comparisons.py tests/test_contract.py
         tests/test_core.py tests/test_deferred.py tests/test_duplicate_transition.py
+        tests/test_easy.py tests/test_lifecycle_ownership.py tests/test_inspection_diagnostics.py
         tests/test_failures.py tests/test_finalization.py tests/test_fixture.py
         tests/test_inspection_logging.py tests/test_inspection_query.py
         tests/test_inspection_snapshot.py tests/test_logging.py
@@ -77,6 +78,7 @@ else
     tests=(
         tests/test_integration_fixture.py tests/test_integration_history.py
         tests/test_tool_roundtrip.py
+        tests/test_easy_sdk.py
         tests/test_mcp_client.py tests/test_openai_chat.py
         tests/test_inspection_checks.py tests/test_inspection_commands.py
         tests/test_inspection_content.py tests/test_inspection_inputs.py
@@ -94,8 +96,8 @@ import tarfile
 with tarfile.open(sys.argv[1]) as archive:
     archive.extractall(sys.argv[2], filter="data")
 PYTHON
-    "$build_python" -I -B -m build --no-isolation --wheel --outdir "$work/rebuilt-dist" "$work/from-sdist/mcp_flightrecorder-0.5.18"
-    rebuilt_wheel="$work/rebuilt-dist/mcp_flightrecorder-0.5.18-py3-none-any.whl"
+    "$build_python" -I -B -m build --no-isolation --wheel --outdir "$work/rebuilt-dist" "$work/from-sdist/mcp_flightrecorder-0.5.19"
+    rebuilt_wheel="$work/rebuilt-dist/mcp_flightrecorder-0.5.19-py3-none-any.whl"
     "$python" -I -B "$source_dir/tools/check_package.py" --source "$source_dir" --wheel "$rebuilt_wheel" --sdist "$sdist" --report "$work/rebuilt-report.json"
     "$python" -I -B -m venv "$work/rebuilt-env"
     "$work/rebuilt-env/bin/python" -I -B -m pip install "$rebuilt_wheel"

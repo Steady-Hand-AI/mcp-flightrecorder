@@ -6,6 +6,7 @@ import logging
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import time
 
 from ._types import LogicalRejection
@@ -157,6 +158,9 @@ class Writer:
         self.recorder = recorder
         self.connection = None
         self.sequence = 0
+        self._created_file = None
+        self._reservation_closed = False
+        self._initial_run_committed = False
 
     def _reserve_path(self):
         path = self.recorder._path
@@ -165,25 +169,78 @@ class Writer:
         if any(os.path.lexists(str(path) + suffix) for suffix in ("", "-wal", "-shm", "-journal")):
             raise FileExistsError("The recording or a SQLite sidecar already exists")
         descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
-        os.close(descriptor)
+        try:
+            created = os.fstat(descriptor)
+            self._created_file = (created.st_dev, created.st_ino)
+        finally:
+            os.close(descriptor)
+            self._reservation_closed = True
+
+    def _owned_file_stat(self):
+        current = self.recorder._path.lstat()
+        if not stat.S_ISREG(current.st_mode) or (current.st_dev, current.st_ino) != self._created_file:
+            return None
+        return current
+
+    def _cleanup_failed_initialization(self, connection_closed):
+        """Remove only our unchanged, run-free main file after releasing handles.
+
+        SQLite normally removes its own sidecars on close. A remaining sidecar
+        has no proven creation identity here, so retain all remnants instead.
+        """
+        if self._created_file is None:
+            return None
+        if not connection_closed or not self._reservation_closed or self._initial_run_committed:
+            return "retained"
+        path = self.recorder._path
+
+        def sidecars_exist():
+            return any(os.path.lexists(str(path) + suffix) for suffix in ("-wal", "-shm", "-journal"))
+
+        try:
+            before = self._owned_file_stat()
+            if before is None or sidecars_exist():
+                return "retained"
+            if before.st_size:
+                # No journal/lock side effects while checking closed remnants.
+                uri = path.as_uri() + "?mode=ro&immutable=1"
+                with closing(sqlite3.connect(uri, uri=True, isolation_level=None)) as reader:
+                    has_runs = reader.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='runs'").fetchone()
+                    if has_runs and reader.execute("SELECT 1 FROM runs LIMIT 1").fetchone():
+                        return "retained"
+            after = self._owned_file_stat()
+            if after is None or sidecars_exist() or (
+                    before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                    after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                return "retained"
+            path.unlink()
+            return "removed"
+        except (OSError, sqlite3.Error):
+            return "retained"
 
     def _initialize(self):
         self._reserve_path()
         rec = self.recorder
+        if self._owned_file_stat() is None:
+            raise OSError("The newly reserved recording was replaced")
         self.connection = connect(rec._path, timeout=rec._limits["busy_timeout_ms"] / 1000)
         self.connection.executescript(files("mcp_flightrecorder").joinpath("schema.sql").read_text())
         self.connection.execute(f"PRAGMA busy_timeout={rec._limits['busy_timeout_ms']}")
         self.connection.execute("BEGIN IMMEDIATE")
         insert_row(self.connection, "runs", rec._initial_run())
         self.connection.execute("COMMIT")
+        self._initial_run_committed = True
 
     def run(self):
         rec = self.recorder
+        if not rec._in_creator_process():
+            return
         try:
             self._initialize()
         except Exception as error:
             rec._initialization_failed(error)
-            self._close_connection()
+            closed = self._close_connection() is None
+            rec._init_cleanup = self._cleanup_failed_initialization(closed)
             rec._ready.set()
             return
         rec._ready.set()
@@ -343,6 +400,8 @@ class Writer:
 
     def _finish_storage(self):
         rec = self.recorder
+        if not rec._in_creator_process():
+            return
         deadline = rec._shutdown_deadline or (time.monotonic() + 5.0)
         reason = "storage_error"
         if self.connection is not None:
@@ -361,6 +420,8 @@ class Writer:
 
 def retry_finalization(recorder, deadline):
     """Run only on the fresh retry thread, never borrow a writer connection."""
+    if not recorder._in_creator_process():
+        return
     reason, connection = "timeout", None
     try:
         remaining = deadline - time.monotonic()

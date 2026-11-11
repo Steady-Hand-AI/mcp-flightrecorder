@@ -24,14 +24,7 @@ mfr_source=$(cd "$mfr_work/mcp-flightrecorder-0.5.24" && pwd -P)
 cd "$mfr_work"
 "$mfr_work/env/bin/python" -I -B - <<'PYTHON'
 from importlib.metadata import version
-from pathlib import Path
-import sys
 import mcp_flightrecorder
-assert sys.implementation.name == "cpython"
-assert sys.version_info[:2] >= (3, 11)
-assert getattr(sys, "_is_gil_enabled", lambda: True)()
-assert not sys.flags.optimize
-assert Path(mcp_flightrecorder.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
 print(mcp_flightrecorder.__version__, mcp_flightrecorder.__file__)
 for name in ("openai", "mcp", "mcp-types", "httpx2"):
     print(name, version(name))

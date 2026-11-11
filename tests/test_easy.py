@@ -3,10 +3,12 @@ import asyncio
 from contextlib import closing
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -157,6 +159,117 @@ def test_generation_restart_and_new_conversation_never_borrow(tmp_path):
     rec.close()
     assert not [link for link in rows(tmp_path / 'second.sqlite', 'links') if link['relation'] == 'answers']
     assert 'binding_key_missing' in json.dumps(rows(tmp_path / 'second.sqlite'))
+
+
+@pytest.mark.parametrize('existing', [False, True])
+def test_directory_generations_are_fresh_and_configuration_stays_inert(tmp_path, existing):
+    directory = tmp_path / 'recordings with spaces'
+    if existing:
+        directory.mkdir(mode=0o750)
+    destination = directory if existing else str(directory) + '/'
+    rec = AgentRecorder(destination, capture='content')
+    assert directory.exists() is existing
+    if existing:
+        assert list(directory.iterdir()) == []
+    paths = []
+    for index in range(2):
+        rec.start()
+        path = Path(rec.path)
+        assert path.is_absolute() and path.parent == directory
+        assert path.suffix == '.sqlite' and path.is_file()
+        conv = rec.conversation('generation')
+        with conv.turn(str(index)):
+            message, _ = selected(conv)
+            replay(conv, [message])
+        rec.close()
+        assert conv.binding_count == 0
+        paths.append(path)
+    assert paths[0] != paths[1]
+    assert len(list(directory.iterdir())) == 2
+    assert rows(paths[0], 'runs')[0]['run_id'] != rows(paths[1], 'runs')[0]['run_id']
+    assert directory.stat().st_mode & 0o777 == (0o750 if existing else 0o700)
+    assert all(path.stat().st_mode & 0o777 == 0o600 for path in paths)
+    replacement = tmp_path / 'explicit.sqlite'
+    rec.start(replacement).close()
+    assert Path(rec.path) == replacement
+    with pytest.raises(FileExistsError):
+        rec.start()
+    rec.start(None).close()
+    assert rec.path is None and len(list(directory.iterdir())) == 2
+
+
+@pytest.mark.parametrize('alternate', [False, True], ids=['native', 'alternate-policy'])
+def test_missing_directory_leaf_recognizes_supported_separators(tmp_path, monkeypatch, alternate):
+    from mcp_flightrecorder import _recording_path as paths
+
+    separator = os.sep
+    if alternate:
+        # Isolate suffix policy only; this is not a native Windows filesystem test.
+        monkeypatch.setattr(paths, 'os', SimpleNamespace(
+            sep='\\', altsep='/', fspath=os.fspath, getpid=os.getpid))
+        separator = '/'
+    directory = tmp_path / 'missing leaf'
+    requested = str(directory) + separator
+    selected = paths.recording_path(requested)
+    assert isinstance(selected, Path) and selected.is_absolute()
+    assert selected.parent == directory and selected.suffix == '.sqlite'
+    assert directory.is_dir() and directory.stat().st_mode & 0o777 == 0o700
+    assert not selected.exists() and list(directory.iterdir()) == []
+    following = paths.recording_path(requested)
+    assert following != selected and following.parent == directory and not following.exists()
+    # The path helper has reserved nothing; only the actual writer creates the DB.
+    with AgentRecorder(selected) as rec:
+        assert rec.path is selected and selected.is_file()
+    assert selected.stat().st_mode & 0o777 == 0o600
+    assert rows(selected, 'runs')[0]['close_state'] == 'clean'
+    assert list(directory.iterdir()) == [selected]
+
+
+def test_directory_disabled_and_missing_ancestors_do_not_create_paths(tmp_path):
+    destination = tmp_path / 'missing' / 'leaf'
+    rec = AgentRecorder(str(destination) + '/')
+    rec.start(None).close()
+    assert not destination.parent.exists()
+    with pytest.raises(FileNotFoundError):
+        rec.start(str(destination) + '/')
+    assert not destination.parent.exists()
+
+
+@pytest.mark.parametrize('as_path', [False, True])
+def test_explicit_relative_destination_preserves_caller_value_and_type(tmp_path, monkeypatch, as_path):
+    monkeypatch.chdir(tmp_path)
+    destination = Path('relative.sqlite') if as_path else 'relative.sqlite'
+    rec = AgentRecorder(destination)
+    assert rec.path is destination and not Path(destination).exists()
+    rec.start()
+    assert rec.path is destination and Path(destination).is_file()
+    rec.close()
+    with pytest.raises(FileExistsError):
+        rec.start()
+    assert rec.path is destination
+    replacement = 'replacement.sqlite'
+    rec.start(replacement).close()
+    assert rec.path is replacement and Path(replacement).is_file()
+
+
+@pytest.mark.parametrize('destination', [17, b'bytes.sqlite'])
+def test_invalid_destination_type_retains_value_error(tmp_path, monkeypatch, destination):
+    monkeypatch.chdir(tmp_path)
+    rec = AgentRecorder(destination)
+    with pytest.raises(ValueError, match='path must name a new local recording'):
+        rec.start()
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize('suffix', ['', '-wal', '-shm', '-journal'])
+def test_facade_explicit_destination_conflicts_preserve_files(tmp_path, suffix):
+    destination = tmp_path / 'reserved.sqlite'
+    conflict = Path(str(destination) + suffix)
+    conflict.write_bytes(b'preexisting bytes')
+    with pytest.raises(FileExistsError):
+        AgentRecorder(destination).start()
+    assert conflict.read_bytes() == b'preexisting bytes'
+    assert list(tmp_path.iterdir()) == [conflict]
 
 
 def test_two_concurrent_conversations_keep_equal_keys_separate(tmp_path):

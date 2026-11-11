@@ -41,6 +41,7 @@ compatibility_tests/native/test_receipts.py
 compatibility_tests/native/test_session.py
 compatibility_tests/recipes/__init__.py
 compatibility_tests/recipes/test_pydantic.py
+docs/agent-workflow.md
 docs/architecture.html
 docs/architecture.md
 docs/capture.md
@@ -97,11 +98,13 @@ src/mcp_flightrecorder/_logging.py
 src/mcp_flightrecorder/_mcp_inspect.py
 src/mcp_flightrecorder/_proxy.py
 src/mcp_flightrecorder/_recorder.py
+src/mcp_flightrecorder/_recording_path.py
 src/mcp_flightrecorder/_snapshot.py
 src/mcp_flightrecorder/_storage.py
 src/mcp_flightrecorder/_types.py
 src/mcp_flightrecorder/_values.py
 src/mcp_flightrecorder/cli.py
+src/mcp_flightrecorder/demo.py
 src/mcp_flightrecorder/easy.py
 src/mcp_flightrecorder/inspect.py
 src/mcp_flightrecorder/integrations/__init__.py

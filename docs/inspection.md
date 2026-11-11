@@ -1,8 +1,10 @@
 # Inspection API and CLI
 
-**Package 0.5.21 · schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`.** Standard-library readers serve Python and the CLI. They expose retained observations, explicit attribution and uncertainty. They do not score agents, write findings, repair recordings or infer provenance.
+**Package 0.5.22 · schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`.** Standard-library readers serve Python and the CLI. They expose retained observations, explicit attribution and uncertainty. They do not score agents, write findings, repair recordings or infer provenance.
 
 ## Start with a readable investigation
+
+For a complete file/run selection and evidence-policy workflow, see [investigating a recording](agent-workflow.md). Version 0.5.22 adds directory selection and explicit answer-scope/readable-gate conveniences.
 
 ```sh
 fr doctor recording.sqlite
@@ -56,7 +58,7 @@ slice(path, run_id, request_event_id, *, limit=1000, max_depth=12,
 query(path, sql, params=None, *, limit=200, timeout=10.0,
       max_output_bytes=65536, no_content=False)
 runs(path, *, limit=50, cursor=None, max_output_bytes=65536, no_content=False, timeout=10.0)
-gate(path, run_id=None, *, expect=None, min_activity=None,
+gate(path, run_id=None, *, expect=None, min_activity=None, answers="all",
      max_output_bytes=65536, timeout=10.0)
 snapshot(path, output, *, timeout=10.0)
 schema()
@@ -152,7 +154,9 @@ These are output projections, not new storage tables/classes. Fields retain thei
 | Artifact | All columns of `artifacts` **except** `body_text` |
 | Link | All columns of `links` **except** `details_json`, plus `binding_format, message_artifact_id, relative_pointer, result_event_id` from those named details keys, otherwise null |
 | Member | All columns of `request_members` |
-| Answer | `run_id, request_event_id, turn_id, model_call_id, request_sequence, message_index, message_artifact_id, link_id, source_event_id, binding_witness_event_id, binding_request_event_id, target_pointer, association_state, result_event_id, text_equal, comparison_reason` |
+| Answer | `run_id, request_event_id, turn_id, model_call_id, request_sequence, message_index, message_artifact_id, link_id, source_event_id, binding_witness_event_id, binding_request_event_id, target_pointer, association_state, result_event_id, text_equal, comparison_reason, origin, origin_reason, origin_status, dispatch_event_id` |
+
+Answer `origin` is `mcp`, `local` or `unavailable`; `origin_status` and `origin_reason` preserve the shared validator outcome, and `dispatch_event_id` is present only when established. Current/original binding witnesses, same-run authoritative endpoints and explicit relevant dispatch/operation evidence must support origin. Null result identity alone does not prove local handling. This additive projection does not change raw `text_equal` or `comparison_reason`.
 
 `coverage={"producers":{"model":string|null,"host":string|null,"mcp":string|null},"model_complete":bool|null}` projects only known fields. Missing/malformed fields yield null plus uncertainty, not invented explicit unconfigured coverage. `health={"reason_counts":{known_reason:nonnegative_int},"complete":bool}` reads `runs.policy_json.health.reason_counts`. The required known keys are `body_omitted, capacity, closed, duplicate_completion, finalize_busy, finalize_timeout, invalid_input, invalid_scope, other, partial, prerequisite_lost, turn_update_lost, unavailable_boundary, unresolved, writer_failed`. Counter values are nonnegative integers, excluding bool. Emit valid known entries only; complete means all 15 are present/valid, not that capture was complete. Missing/malformed diagnostics are unknown, but any known positive actual-loss counter still fails health. Use run columns for dropped_events/writer_errors. Do not serialize arbitrary extra health keys.
 
@@ -230,15 +234,21 @@ report = inspect.gate(
     expect=["model", "host", "mcp"],
     min_activity={"turns": 1, "model_requests": 2, "model_responses": 2,
                   "decisions": 1, "tool_calls": 1, "answer_occurrences": 1},
-    timeout=10.0, max_output_bytes=65536,
+    answers="all", timeout=10.0, max_output_bytes=65536,
 )
 ```
 
 `expect` must explicitly contain distinct `model` and `host` names; `mcp` is optional. Unlike `check`, missing/empty expectations are invalid. `min_activity` must be a nonempty ordinary dict over the supported count names in the example, with integers from 0 to 2**63−1 excluding bool. At least one **non-turn** minimum must be positive: empty turns alone cannot establish observed activity. CLI equivalents are `--expect model,host,mcp`, `--min-turns`, `--min-model-requests`, `--min-model-responses`, `--min-decisions`, `--min-tool-calls` and `--min-answer-occurrences`. Supply expectations that describe the actual application. Counts are observed facts, not estimates of unrecorded work.
 
-One owned read transaction selects the sole run when `run_id` is omitted, validates coverage/health/integrity and complete captured turns, and visits every relevant answer occurrence and `tools/call`. This includes records beyond display pages and witness samples. `data.expectations` contains boundaries and supplied minima; `data.actual_activity` contains all six observed counts. A completed evaluation sets `evaluation_complete=true`, independently of displayed witnesses; bounded witnesses are only illustrations. Each invocation has one cooperative deadline and always uses no-content output.
+One owned read transaction selects the sole run when `run_id` is omitted, validates coverage/health/integrity and complete captured turns, and visits every relevant answer occurrence and `tools/call`. This includes records beyond display pages and witness samples. `data.expectations` contains boundaries, supplied minima and the selected `answers` scope; `data.actual_activity` contains all six observed counts. A completed evaluation sets `evaluation_complete=true`, independently of displayed witnesses; bounded witnesses are only illustrations. Each invocation has one cooperative deadline and always uses no-content output.
 
 Every submitted answer occurrence must have valid current and original-witness links. When a text comparison is required, compatible original raw text must match, or the exact occurrence must have fully validated declared preparation whose original prepared text matches the submitted text. The same-run endpoints, order, complete declared sources, selected source and original tokens must all be available and consistent. Explicit unresolved attribution or omitted relevant diagnostics cannot be promoted into positive evidence. Preparation preserves raw `text_equal`/`text_mismatch` and does not verify semantic equivalence.
+
+`answers="all"` is the unchanged default. Explicit `answers="mcp"` (CLI `--answers mcp`) excludes only the local result-text comparison of an independently validated, unambiguous local occurrence. An explicit null result alone is insufficient: current/original witnesses, authoritative endpoints, complete relevant local dispatch and absence of competing dispatch/MCP evidence must agree. Malformed result identities produce FAIL (`invalid_result_identity`); missing selected MCP results and shared-decision retry ambiguity remain UNKNOWN. Other occurrence validation, coverage, health, lifecycle, integrity and attribution checks still run over the entire population. Raw `text_equal` and comparison reasons are unchanged; activity minima still count all observed activity.
+
+`excluded_count` counts excluded answer occurrences, including replay. `excluded` and `answer_witnesses` are bounded samples with `excluded_omitted_count` and `answer_witnesses_omitted_count`, not reduced evaluation populations. `mcp_answer_count` counts demonstrably MCP-origin occurrences. Report those exclusions as unverified local comparisons, not successes. Under explicitly selected MCP scope, no demonstrably MCP-origin answer comparisons gives UNKNOWN `no_mcp_answers_in_scope`, unless an independent failure already establishes FAIL. Default-scope model-only behavior is unchanged.
+
+`gate --text` renders the same completed result without reopening the recording. It preserves verdict, chosen scope, exclusions and cutoff notices inside the existing output budget. Event chains, preparation and byte counts appear only when supported; missing facts remain unknown. JSON remains the default. Do not narrow policy or declare preparation merely to obtain PASS.
 
 Each `tools/call` must be attributed through consistent authoritative evidence to its actual model decision or an explicitly declared host operation. A non-null ID or `link_basis` string is insufficient. `tools/list` discovery is exempt from that attribution requirement. A faithfully and completely recorded tool error is not failed merely because the tool returned an error.
 
@@ -280,7 +290,7 @@ Retained BLOB or non-finite REAL cells reject the entire query with sql_rejected
 
 ## 8. CLI and local snapshot
 
-All options follow the subcommand. The original commands default to exactly one compact JSON value plus newline on stdout, without progress text. `turns --text` and `explain --text` opt into readable output; `doctor` defaults to text and offers `--json`. Parse failures return invalid_request JSON/exit 1. Explicit help/version may use conventional text. `--acceptance` remains unsupported. `fr mcp` is the optional stdio inspection server described in the [MCP guide](mcp-inspection.md); its stdout is MCP protocol traffic.
+All options follow the subcommand. The original commands default to exactly one compact JSON value plus newline on stdout, without progress text. `turns --text`, `explain --text` and `gate --text` opt into readable output; `doctor` defaults to text and offers `--json`. Parse failures return invalid_request JSON/exit 1. Explicit help/version may use conventional text. `--acceptance` remains unsupported. `fr mcp` is the optional stdio inspection server described in the [MCP guide](mcp-inspection.md); its stdout is MCP protocol traffic.
 
 Common read options: `--max-output-bytes N`, `--no-content`. `runs`, the scoped readers, gate and doctor additionally accept `--timeout SECONDS` (default 10, positive finite numeric value at most 30). Timeout validation precedes implicit run selection. Run-scoped CLI commands accept `--run ID`; omit it only when actual DB cardinality is exactly one (not when a bounded first page happens to show one). Successful inference and the selected operation use separate read transactions and deadlines; `explain --last` and `doctor --last` add latest-turn selection. Zero/multiple runs yields invalid_request with `fr runs` guidance. Python `diagnose` and `gate` support singleton inference within their own snapshots; the other run-scoped readers take an explicit run_id. CLI gate forwards selection to the same owned transaction without an independent lookup.
 
@@ -296,10 +306,14 @@ Common read options: `--max-output-bytes N`, `--no-content`. `runs`, the scoped 
 | `fr sql DB SQL` | `--params JSON` array/object, `--limit`, `--timeout`; no run selector |
 | `fr schema` | No DB/options beyond help |
 | `fr snapshot DB OUT` | `--timeout` default 10; no run/content/output-budget options |
-| `fr gate DB` | `--run`, `--timeout`, `--expect`, named `--min-*` activity flags; always no-content |
+| `fr gate DB` | `--run`, `--timeout`, `--expect`, named `--min-*` activity flags, `--answers all\|mcp`, `--text`; always no-content |
 | `fr mcp DB` | Optional `[mcp]` dependency; `--allow-content` enables explicit payload calls |
 
-`python -m mcp_flightrecorder` is behaviorally identical. CLI output/exit follows Python data/error semantics, with run inference only as described. SQL CLI cannot represent bytes in JSON params; Python may bind them. Stdout JSON has no paths/SQL/content echoed into errors unnecessarily.
+The `DB` input of `runs`, `check`, `turns`, `explain`, `doctor`, `payload`, `slice`, `sql`, `gate` and snapshot source also accepts a directory. One shared CLI resolver selects only direct regular non-symlink `.sqlite` children by `(max(database_mtime_ns, wal_mtime_ns), filename)`; SHM does not affect ordering. It resolves once, reports the absolute selection on stderr and within text budgets, and does not fall back if the selected file fails. Use the explicit selected file for follow-ups and CI. Directory browsing does not freeze a live file. Python readers, `fr mcp` and snapshot output retain explicit-file semantics.
+
+For a recording with no turns, plain unfiltered `turns --text` provides a bounded operation view with an MCP-only scope banner and actual operation IDs/times/statuses. Explicit `--run` and `--limit` are supported; `--last`, cursors and turn filters are not silently ignored or reinterpreted. The JSON turns result is unchanged. No host turns, decisions or model-request ancestry are synthesized. Doctor's unattributed-operation guidance and gate output retain that scope limitation.
+
+`python -m mcp_flightrecorder`, `fr` and `mcp-flightrecorder` use the same CLI. CLI output/exit follows Python data/error semantics, with run inference only as described. SQL CLI cannot represent bytes in JSON params; Python may bind them. Stdout JSON has no paths/SQL/content echoed into errors unnecessarily.
 
 Cyclic source or destination symlinks are rejected as `invalid_request/invalid_path`; ordinary nonexistent source recordings remain `recording_unreadable/storage_failure`, while fresh nonexistent destination paths are allowed. This is validation-time classification, not a guarantee against later filesystem changes.
 

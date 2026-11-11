@@ -136,7 +136,7 @@ def test_schema_resource_matches_canonical_and_runtime_has_no_dependencies():
     installed = resources.files('mcp_flightrecorder').joinpath('schema.sql').read_bytes()
     check.equal(installed, (ROOT / 'sql/schema.sql').read_bytes(),
                 msg='The wheel resource must be a byte-identical build copy of the single canonical schema')
-    check.equal(metadata.version('mcp-flightrecorder'), '0.5.21', msg='The installed package matches the source release version')
+    check.equal(metadata.version('mcp-flightrecorder'), '0.5.22', msg='The installed package matches the source release version')
     requirements = [Requirement(value) for value in metadata.requires('mcp-flightrecorder') or []]
     base = [str(value) for value in requirements if value.marker is None or value.marker.evaluate({'extra': ''})]
     check.equal(base, [],

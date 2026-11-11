@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.5.22
+
+- Add the SDK-free installed demo with four synthetic recordings, complete investigation commands and the `mcp-flightrecorder` CLI alias alongside `fr`.
+- Add explicit MCP answer scope and bounded readable gate verdicts. Exclude only validated local result-text comparisons; preserve default policy, raw comparison facts and independent failures or unknowns.
+- Support fresh directory destinations for the facade and proxy, including supported trailing separators, and optional strict proxy initialization before child launch. Keep writer reservation and default fail-open forwarding unchanged.
+- Add CLI directory selection and readable MCP-only operation views without inventing host turns or changing JSON turn results. Document file/run identity, scope, uncertainty and the SDK-free host example with release-pinned public links.
+
 ## 0.5.21
 
 - Add `fr proxy --record FILE -- SERVER_COMMAND ...` for one POSIX stdio client and child, forwarding native bytes unchanged while a separate bounded observer captures selected MCP tool requests and responses.

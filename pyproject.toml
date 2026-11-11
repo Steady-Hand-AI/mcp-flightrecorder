@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp-flightrecorder"
-version = "0.5.21"
+version = "0.5.22"
 description = "Bounded, explicit MCP host evidence capture in portable SQLite"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,6 +21,7 @@ Documentation = "https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/
 
 [project.scripts]
 fr = "mcp_flightrecorder.cli:main"
+mcp-flightrecorder = "mcp_flightrecorder.cli:main"
 
 [project.optional-dependencies]
 openai-chat = ["openai>=3.35.1"]

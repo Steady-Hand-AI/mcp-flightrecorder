@@ -185,8 +185,7 @@ def check_wheel(members: dict[str, bytes], source: dict[str, bytes], project: di
     for name, data in copied.items():
         require(members[name] == data, f"wheel content differs from source: {name}")
     check_metadata(members[prefix + "METADATA"], project, source["README.md"])
-    require(members[prefix + "entry_points.txt"].decode().strip() ==
-            "[console_scripts]\nfr = mcp_flightrecorder.cli:main", "incorrect wheel CLI entrypoint")
+    check_entrypoints(members[prefix + "entry_points.txt"])
     rows = list(csv.reader(io.StringIO(members[prefix + "RECORD"].decode())))
     require(all(len(row) == 3 for row in rows), "malformed wheel RECORD")
     require(len(rows) == len(members), "duplicate or missing wheel RECORD row")
@@ -198,6 +197,12 @@ def check_wheel(members: dict[str, bytes], source: dict[str, bytes], project: di
             expected = base64.urlsafe_b64encode(hashlib.sha256(members[name]).digest()).rstrip(b"=").decode()
             require(digest == "sha256=" + expected and size == str(len(members[name])),
                     f"wheel RECORD mismatch: {name}")
+
+
+def check_entrypoints(data: bytes) -> None:
+    require(data.decode().strip() ==
+            "[console_scripts]\nfr = mcp_flightrecorder.cli:main\nmcp-flightrecorder = mcp_flightrecorder.cli:main",
+            "incorrect CLI entrypoints")
 
 
 def check_sdist(members: dict[str, bytes], source: dict[str, bytes], project: dict) -> None:
@@ -215,6 +220,7 @@ def check_sdist(members: dict[str, bytes], source: dict[str, bytes], project: di
         require(members[name] == data, f"sdist content differs from source: {name}")
     check_metadata(members["PKG-INFO"], project, source["README.md"])
     check_metadata(members[egg + "PKG-INFO"], project, source["README.md"])
+    check_entrypoints(members[egg + "entry_points.txt"])
     exact(set(members[egg + "SOURCES.txt"].decode().splitlines()),
           set(members) - {"PKG-INFO", "setup.cfg"}, "sdist build manifest")
 
@@ -227,7 +233,7 @@ def inventory(members: dict[str, bytes]) -> list[dict]:
 def check(source: Path, wheel: Path | None = None, sdist: Path | None = None) -> dict:
     members = read_source(source)
     project = tomllib.loads(members["pyproject.toml"].decode())["project"]
-    require(project["name"] == "mcp-flightrecorder" and project["version"] == "0.5.21"
+    require(project["name"] == "mcp-flightrecorder" and project["version"] == "0.5.22"
             and project["requires-python"] == ">=3.11" and project["license"] == "Apache-2.0"
             and project["urls"] == URLS and project["readme"] == "README.md", "incorrect project identity")
     report = {"status": "PASS", "source": inventory(members)}

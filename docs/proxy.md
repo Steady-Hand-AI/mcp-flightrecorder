@@ -10,6 +10,23 @@ The proxy connects one client to one child server. It forwards both byte streams
 
 Pass the child command as an argument vector after `--`, never as a shell command string. The child inherits the working directory and environment; these are not automatically stored in the recording. Stdout belongs exclusively to native protocol bytes. Child stderr remains native stderr; proxy capture diagnostics also use stderr. Keep stderr separate from protocol stdout.
 
+## Fresh paths and startup
+
+An explicit file must be new. To avoid reusing a filename, pass an existing directory or a directory destination ending in `/`:
+
+```text
+fr proxy --record /absolute/path/to/recordings/ -- SERVER_COMMAND ARGUMENT...
+fr proxy --record /absolute/path/to/recordings/ --require-recording -- SERVER_COMMAND ARGUMENT...
+```
+
+Each launch chooses a fresh timestamp/PID/random `.sqlite` name. The existing writer reserves the database atomically; the proxy never pre-creates it. A missing leaf directory is created privately only when its parent already exists. Existing directory permissions are not changed, and missing ancestor directories are not created recursively.
+
+The successful absolute recording path is announced on stderr only after recorder initialization. Keep it for inspection. Relative-path warnings and selected-path messages use the bounded nonblocking diagnostic route; they must not become protocol stdout or stall forwarding when stderr is blocked.
+
+Default startup remains fail-open: capture initialization can fail while the child still runs. `--require-recording` waits for actual recorder initialization before launching the child and refuses startup on failure; it is invalid without `--record`. This promises startup only. Later capacity/storage/observer loss remains possible and must be reported, not retried or hidden. Existing main files and SQLite sidecars are preserved on conflicts; select a fresh file or directory destination rather than deleting them.
+
+Version 0.5.22 supports directory destinations and strict startup. The pinned-package example below uses an explicit file. See [source installation](../README.md#install-this-source-checkout) to work from a checkout.
+
 ## Run the deterministic example outside the source directory
 
 These commands install the pinned package and modern MCP extra, obtain the matching source example, then run in a fresh directory outside the source tree. The source-shipped [server](../examples/proxy_server.py) exposes `answer({})`, which returns `42`; it uses no credentials or paid service. The wheel does not install example files. Keep legacy MCP 1.x in a separate environment.
@@ -28,8 +45,8 @@ print(sys.version, sqlite3.sqlite_version, sys.executable)
 PYTHON
 mfr_work=$(mktemp -d /tmp/mfr-proxy-XXXXXX)
 "$mfr_python" -m venv "$mfr_work/env"
-"$mfr_work/env/bin/python" -m pip install 'mcp-flightrecorder[mcp]==0.5.21'
-git clone --depth 1 --branch 0.5.21 https://github.com/Steady-Hand-AI/mcp-flightrecorder.git "$mfr_work/source"
+"$mfr_work/env/bin/python" -m pip install 'mcp-flightrecorder[mcp]==0.5.22'
+git clone --depth 1 --branch 0.5.22 https://github.com/Steady-Hand-AI/mcp-flightrecorder.git "$mfr_work/source"
 mfr_source="$mfr_work/source"
 "$mfr_work/env/bin/python" -m pip check
 cd "$mfr_work"
@@ -77,11 +94,13 @@ cat proxy.stderr
 "$mfr_work/env/bin/fr" check content.sqlite --expect mcp
 ```
 
-Alternatively, extract `mcp_flightrecorder-0.5.21.tar.gz` from the [PyPI release files](https://pypi.org/project/mcp-flightrecorder/0.5.21/#files) and set `mfr_source` to its absolute extracted path instead of cloning. For a local candidate, install its exact matching wheel with the `[mcp]` extra and use its clean source export in place of the two public acquisition steps.
+Alternatively, extract `mcp_flightrecorder-0.5.22.tar.gz` from the [PyPI release files](https://pypi.org/project/mcp-flightrecorder/0.5.22/#files) and set `mfr_source` to its absolute extracted path instead of cloning. For a local candidate, install its exact matching wheel with the `[mcp]` extra and use its clean source export in place of the two public acquisition steps.
 
-The client code is the same for each launch; only its server argument vector changes. Omitting `--record` forwards without creating a database. With recording enabled, the default is **metadata**, which omits bodies. `--capture content` explicitly allows retained tool arguments/results and may expose sensitive data. Names, IDs and other metadata can remain sensitive in either mode. Every recording path must be fresh; an existing file is never overwritten.
+The client code is the same for each launch; only its server argument vector changes. Omitting `--record` forwards without creating a database. With recording enabled, the default is **metadata**, which omits bodies. `--capture content` explicitly allows retained tool arguments/results and may expose sensitive data. Names, IDs and other metadata can remain sensitive in either mode. Every explicit recording file must be fresh; an existing file is never overwritten. Directory mode chooses a fresh file for each launch.
 
 Check the run's close state and preserve `proxy.stderr`. A successful `check --expect mcp` verifies the available boundary evidence, not complete wire capture. Observer losses can happen before recorder admission and are reported on stderr; SQLite health does not account for all such losses. This example should produce one discovery operation and one tool operation, with no host turns, model calls, decisions or dispatches. `unattributed_operation` is an expected diagnostic. A passing host evidence gate is not expected for this MCP-only recording.
+
+For a quick operation view, plain `fr turns FILE --text` lists bounded MCP operations when the recording has no turns, with an explicit MCP-only banner. `--run` and `--limit` remain available. Turn filters, cursors and `--last` are not repurposed as operation selectors; JSON continues to return turns. Doctor explains unattributed operations in this scope. A directory can select a recent recording for browsing, but copy the reported absolute file and run ID before subsequent investigation; see the [agent workflow](agent-workflow.md).
 
 ## Find retained payloads through the public reader
 

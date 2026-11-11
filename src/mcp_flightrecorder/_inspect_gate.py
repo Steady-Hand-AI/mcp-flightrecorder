@@ -1,9 +1,9 @@
 """One conservative host-evidence policy over a complete owned read snapshot."""
 from ._inspect_common import InspectionError, invalid, json_object, run_read, validate_int
 from ._inspect_checks import _check, _count, _item, _status
-from ._inspect_diagnostics import _occurrence_uncertainty, _preparation
+from ._inspect_diagnostics import _preparation
 from ._inspect_records import event_complete
-from ._inspect_relations import answer_rows, event_row, relation_state, request_info
+from ._inspect_relations import answer_rows, decision_state, event_row, relation_state
 
 
 ACTIVITY = ("turns", "model_requests", "model_responses", "decisions", "tool_calls", "answer_occurrences")
@@ -12,29 +12,6 @@ _BOUNDARIES = {
     "host.dispatch": "host", "host.tool_result": "host",
     "mcp.request": "mcp", "mcp.response": "mcp",
 }
-
-
-def _decision_state(ctx, decision, before):
-    if decision is None:
-        return "unknown", "decision_unavailable"
-    if decision["kind"] != "model.tool_call" or decision["boundary"] != "model":
-        return "fail", "wrong_decision_kind"
-    if decision["sequence"] >= before["sequence"]:
-        return "fail", "decision_order"
-    if event_complete(decision) is not True or decision["model_call_id"] is None:
-        return "unknown", "decision_incomplete"
-    requests = ctx.connection.execute("""SELECT * FROM observed_events
-        WHERE run_id=? AND kind='model.request' AND model_call_id=? LIMIT 2""",
-        (ctx.run_id, decision["model_call_id"])).fetchall()
-    if not requests:
-        return "unknown", "decision_request_unavailable"
-    if len(requests) != 1 or requests[0]["sequence"] >= decision["sequence"]:
-        return "fail", "decision_request_conflict"
-    if requests[0]["boundary"] != "model":
-        return "fail", "decision_request_boundary"
-    if event_complete(requests[0]) is not True:
-        return "unknown", "decision_request_incomplete"
-    return "pass", None
 
 
 def _attribution(ctx, operation):
@@ -50,7 +27,7 @@ def _attribution(ctx, operation):
         if len(rows) > 1:
             return "fail", "decision_identity_conflict"
         decision = rows[0] if rows else None
-        state, reason = _decision_state(ctx, decision, start)
+        state, reason = decision_state(ctx, ctx.run_id, decision, start)
         if state != "pass":
             return state, reason
         if operation["model_call_id"] != decision["model_call_id"]:
@@ -83,7 +60,7 @@ def _attribution(ctx, operation):
         if state != "pass":
             return state, reason
         source = event_row(ctx, ctx.run_id, link["source_event_id"], observed=True)
-        state, reason = _decision_state(ctx, source, dispatch)
+        state, reason = decision_state(ctx, ctx.run_id, source, dispatch)
         if state != "pass":
             return state, reason
         source_models[source["event_id"]] = source["model_call_id"]
@@ -99,37 +76,10 @@ def _attribution(ctx, operation):
 
 
 def _comparison(ctx, answer):
-    link = ctx.connection.execute("SELECT * FROM links WHERE run_id=? AND link_id=?",
-                                  (ctx.run_id, answer["link_id"])).fetchone()
-    state, reason = relation_state(ctx, ctx.run_id, link)
-    if state != "pass":
-        return state, reason
-    if answer["association_state"] != "linked":
-        return "unknown", answer["association_state"]
-    result = event_row(ctx, ctx.run_id, answer["result_event_id"], observed=True)
-    if result is None:
+    if answer["origin_status"] != "pass":
+        return answer["origin_status"], answer["origin_reason"]
+    if answer["origin"] != "mcp":
         return "unknown", "result_unavailable"
-    if result["kind"] != "mcp.response" or result["boundary"] != "mcp":
-        return "fail", "result_kind_conflict"
-    if event_complete(result) is not True:
-        return "unknown", "result_incomplete"
-    decision = event_row(ctx, ctx.run_id, link["source_event_id"], observed=True)
-    for event_id, pointer in ((answer["request_event_id"], answer["target_pointer"]),
-                              (link["witness_event_id"], link["target_pointer"])):
-        structure = request_info(ctx, ctx.run_id, event_id)
-        if structure["status"] != "pass":
-            return structure["status"], structure["reason"]
-        request = structure["event"]
-        if request["boundary"] != "model":
-            return "fail", "request_boundary_conflict"
-        if result["sequence"] >= request["sequence"]:
-            return "fail", "result_witness_order"
-        state, reason = _decision_state(ctx, decision, request)
-        if state != "pass":
-            return state, reason
-        reason = _occurrence_uncertainty(ctx, structure["event"], pointer, structure)
-        if reason:
-            return "unknown", reason
     if answer["text_equal"] is True:
         return "pass", None
     if answer["text_equal"] is None:
@@ -160,7 +110,7 @@ def _gate_relation(ctx, run_id, link):
     return state, reason
 
 
-def _gate(ctx, expect, minimum):
+def _gate(ctx, expect, minimum, answers):
     if ctx.run_id is None:
         rows = ctx.connection.execute("SELECT run_id FROM runs LIMIT 2").fetchall()
         if len(rows) != 1:
@@ -195,11 +145,30 @@ def _gate(ctx, expect, minimum):
             state, reason = "fail", "event_boundary_conflict"
         _count(extra["authoritative_observations"], state,
                {"event_id": event["event_id"]}, reason)
+    excluded, answer_witnesses = [], []
+    excluded_count = mcp_answer_count = answer_count = 0
     for answer in answer_rows(ctx, ctx.run_id):
-        state, reason = _comparison(ctx, answer)
-        _count(extra["answer_comparisons"], state,
-               {"request_event_id": answer["request_event_id"], "link_id": answer["link_id"],
-                "target_pointer": answer["target_pointer"]}, reason)
+        answer_count += 1
+        mcp_answer_count += answer["origin"] == "mcp"
+        ids = {key: answer[key] for key in ("request_event_id", "source_event_id", "result_event_id",
+               "dispatch_event_id", "binding_witness_event_id", "link_id", "target_pointer")}
+        if answers == "mcp" and answer["origin"] == "local":
+            excluded_count += 1
+            state, reason = "excluded", "local_result_comparison_excluded"
+            if len(excluded) < 10:
+                excluded.append({"ids": ids, "reason": reason})
+        else:
+            state, reason = _comparison(ctx, answer)
+            _count(extra["answer_comparisons"], state, ids, reason)
+        if len(answer_witnesses) < 10:
+            answer_witnesses.append({"ids": ids, "origin": answer["origin"],
+                "origin_reason": answer["origin_reason"], "status": state, "reason": reason,
+                "text_equal": answer["text_equal"], "comparison_reason": answer["comparison_reason"],
+                "preparation": "matches" if state == "pass" and answer["text_equal"] is False else "unknown"})
+    if answers == "mcp":
+        scoped = _item("mcp_answer_scope", "answer_occurrence")
+        items.append(scoped)
+        _count(scoped, "pass" if mcp_answer_count else "unknown", {}, "no_mcp_answers_in_scope")
     for operation in ctx.connection.execute("SELECT * FROM operations WHERE run_id=? AND method='tools/call' ORDER BY started_at,operation_id", (ctx.run_id,)):
         ctx.check_deadline()
         state, reason = _attribution(ctx, operation)
@@ -235,13 +204,23 @@ def _gate(ctx, expect, minimum):
     for item in items:
         item["status"] = _status(item)
         item["witnesses_omitted"] = item["failed"] + item["unknown"] - len(item["witnesses"])
-    data.update(expectations={"boundaries": sorted(expect), "min_activity": dict(minimum)},
+    data.update(expectations={"boundaries": sorted(expect), "min_activity": dict(minimum), "answers": answers},
+                excluded_count=excluded_count, excluded=excluded,
+                excluded_omitted_count=excluded_count - len(excluded),
+                mcp_answer_count=mcp_answer_count, answer_witnesses=answer_witnesses,
+                answer_witnesses_omitted_count=answer_count - len(answer_witnesses),
                 actual_activity=actual, evaluation_complete=True,
                 required_failures=[item["id"] for item in items if item["status"] == "fail"],
                 required_unknowns=[item["id"] for item in items if item["status"] == "unknown"])
     data["status"] = "fail" if data["required_failures"] else "unknown" if data["required_unknowns"] else "pass"
 
     def bounded_samples():
+        for samples, omitted in ((answer_witnesses, "answer_witnesses_omitted_count"),
+                                 (excluded, "excluded_omitted_count")):
+            if samples:
+                samples.pop()
+                data[omitted] += 1
+                return True
         before = sum(len(item["witnesses"]) for item in items)
         changed = shrink()
         if changed:
@@ -252,25 +231,29 @@ def _gate(ctx, expect, minimum):
     return data, bounded_samples
 
 
-def gate(path, run_id=None, *, expect=None, min_activity=None, max_output_bytes=65536, timeout=10.0):
+def gate(path, run_id=None, *, expect=None, min_activity=None, answers="all", max_output_bytes=65536, timeout=10.0):
     """Verify complete host evidence against explicit coverage and activity.
 
     A completed read has status pass, fail or unknown. Read/timeout/output errors
     have ok=False and never carry a partial success verdict. Samples do not bound
     evaluation; raw comparisons remain unchanged by valid preparation evidence.
+    answers="mcp" excludes only validated local result comparisons, never other
+    evidence checks. Exclusion counts include every occurrence, including replay.
     """
     def validate():
+        if type(answers) is not str or answers not in {"all", "mcp"}:
+            invalid("invalid_answers", "answers must be all (default) or explicit mcp scope.")
         if (type(expect) not in (list, tuple, set, frozenset)
                 or any(type(name) is not str or name not in {"model", "host", "mcp"} for name in expect)
                 or len(set(expect)) != len(expect) or not {"model", "host"} <= set(expect)):
-            invalid("invalid_expect", "gate requires distinct expected boundaries including model and host; mcp is optional.")
+            invalid("invalid_expect", "gate requires distinct expected boundaries including model and host; mcp is optional. MCP-only proxy evidence does not satisfy this host policy. Try --expect model,host,mcp --min-answer-occurrences 1 for a host recording.")
         if type(min_activity) is not dict or not min_activity or any(type(name) is not str or name not in ACTIVITY for name in min_activity):
-            invalid("invalid_activity", "Supply named minimum activity counts for gate.")
+            invalid("invalid_activity", "Supply named minimum activity counts for gate; for example --min-answer-occurrences 1.")
         for value in min_activity.values():
             validate_int(value, 0, 2**63 - 1, "min_activity")
         if not any(value > 0 for name, value in min_activity.items() if name != "turns"):
-            invalid("invalid_activity", "At least one non-turn activity minimum must be positive.")
+            invalid("invalid_activity", "At least one non-turn activity minimum must be positive; for example --min-answer-occurrences 1.")
 
     return run_read("gate", path, {} if run_id is None else {"run_id": run_id},
-                    lambda ctx: _gate(ctx, expect, min_activity), max_output_bytes=max_output_bytes,
+                    lambda ctx: _gate(ctx, expect, min_activity, answers), max_output_bytes=max_output_bytes,
                     no_content=True, timeout=timeout, validate=validate)

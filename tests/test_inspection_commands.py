@@ -2,7 +2,9 @@
 from contextlib import closing
 import importlib.metadata
 import json
+import os
 from pathlib import Path
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -11,9 +13,149 @@ import sys
 import pytest
 import pytest_check as check
 
-from mcp_flightrecorder import inspect
+from mcp_flightrecorder import Recorder, inspect
 
 from .recordings import integration_recording
+
+
+def _installed(cwd, *args):
+    return subprocess.run(_argv("fr") + [str(arg) for arg in args], cwd=cwd,
+                          capture_output=True, text=True, timeout=20, input="")
+
+
+@pytest.mark.parametrize("command", ["runs", "check", "turns", "explain", "doctor", "payload",
+                                    "slice", "sql", "snapshot", "gate"])
+def test_directory_input_selects_one_file_for_each_reader(command_recording, command):
+    path, symbols, cwd = command_recording
+    folder = cwd / "recordings"
+    folder.mkdir()
+    selected = folder / "latest ? #.sqlite"
+    shutil.copyfile(path, selected)
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as connection:
+        artifact = connection.execute("SELECT prompt_ref FROM turns WHERE turn_id=?", (symbols["T1"],)).fetchone()[0]
+    options = {
+        "runs": [], "check": [], "turns": [], "explain": ["--turn", symbols["T1"]],
+        "doctor": ["--json"], "payload": [artifact], "slice": [symbols["R0"]],
+        "sql": ["SELECT count(*) FROM events"],
+        "snapshot": [cwd / "directory-copy.sqlite"],
+        "gate": ["--expect", "model,host,mcp", "--min-answer-occurrences", "1"],
+    }
+    result = _installed(cwd, command, folder, *options[command])
+    expected_options = [cwd / "explicit-copy.sqlite"] if command == "snapshot" else options[command]
+    explicit = _installed(cwd, command, selected, *expected_options)
+    assert result.returncode == explicit.returncode, (result, explicit)
+    assert result.stderr == "Selected recording: " + json.dumps(str(selected.resolve())) + "\n"
+    assert explicit.stderr == ""
+    observed, expected = json.loads(result.stdout), json.loads(explicit.stdout)
+    if command == "snapshot":
+        assert observed["ok"] and expected["ok"]
+        assert observed["data"].pop("output_path") == str((cwd / "directory-copy.sqlite").resolve())
+        expected["data"].pop("output_path")
+    assert observed == expected
+
+
+def test_directory_order_uses_db_and_wal_mtime_then_name(command_recording):
+    path, _, cwd = command_recording
+    folder = cwd / "recordings"
+    folder.mkdir()
+    older, newer = (folder / name for name in ("a.sqlite", "b.sqlite"))
+    for file, seconds in ((older, 100), (newer, 200)):
+        shutil.copyfile(path, file)
+        os.utime(file, (seconds, seconds))
+    wal = folder / "a.sqlite-wal"
+    wal.touch()
+    shm = folder / "b.sqlite-shm"
+    shm.touch()
+    os.utime(shm, (600, 600))
+    # A symlink to a newer file and a directory ending in .sqlite are ineligible.
+    (folder / "z.sqlite").symlink_to(path)
+    (folder / "directory.sqlite").mkdir()
+    for seconds, selected in ((300, older), (200, newer)):
+        os.utime(wal, (seconds, seconds))
+        result = _installed(cwd, "runs", folder)
+        assert result.returncode == 0, result
+        assert result.stderr == "Selected recording: " + json.dumps(str(selected.resolve())) + "\n"
+
+
+def test_directory_errors_do_not_fall_back_or_select_mcp_and_snapshot_output(command_recording):
+    path, _, cwd = command_recording
+    folder = cwd / "recordings"
+    folder.mkdir()
+    empty = _installed(cwd, "runs", folder)
+    assert empty.returncode == 3 and json.loads(empty.stdout)["error"]["reason"] == "no_recordings"
+    usable = folder / "usable.sqlite"
+    shutil.copyfile(path, usable)
+    os.utime(usable, (100, 100))
+    invalid = folder / "broken.sqlite"
+    invalid.write_bytes(b"not a recording")
+    result = _installed(cwd, "runs", folder)
+    assert result.returncode == 3 and not json.loads(result.stdout)["ok"]
+    assert str(invalid.resolve()) in result.stderr
+    mcp = _installed(cwd, "mcp", folder)
+    assert mcp.returncode != 0 and not mcp.stdout
+    assert "Selected recording" not in mcp.stderr
+    refused = _installed(cwd, "snapshot", path, folder)
+    assert not json.loads(refused.stdout)["ok"] and refused.stderr == ""
+    assert {p.name for p in folder.iterdir()} == {"usable.sqlite", "broken.sqlite"}
+
+
+def test_proxy_text_lists_bounded_operations_without_turns_or_selector_reinterpretation(tmp_path):
+    path = tmp_path / "proxy.sqlite"
+    recorder = Recorder(path, capture="metadata",
+                        coverage={"producers": {"model": None, "host": None, "mcp": "mfr.proxy"},
+                                        "model_complete": False})
+    run = recorder.capture_scope().run_id
+    starts = []
+    try:
+        for name in ("synthetic\x1b[31m\u009b", "another"):
+            start = recorder.start_operation(scope=recorder.capture_scope(), client_id="test",
+                                             method="tools/call", name=name, arguments={})
+            assert start.status == "accepted"
+            starts.append(start)
+            assert recorder.finish_operation(start.ticket, status="ok", result="42").status == "accepted"
+    finally:
+        assert recorder.close().portable
+    text = _installed(tmp_path, "turns", tmp_path, "--text", "--limit", "1", "--max-output-bytes", "1024")
+    assert text.returncode == 0, text
+    assert "MCP-only" in text.stdout and "CUTOFF" in text.stdout
+    assert "Operation " in text.stdout and "tools/call" in text.stdout and '"ok"' in text.stdout
+    assert starts[0].operation_id in text.stdout and starts[1].operation_id not in text.stdout
+    assert "\\u001b" in text.stdout and "\\u009b" in text.stdout
+    assert len(text.stdout.encode()) <= 1024 and str(path.resolve()) in text.stdout
+    ordinary = _installed(tmp_path, "turns", path)
+    assert json.loads(ordinary.stdout) == inspect.find_turns(path, run)
+    for selector in (["--last"], ["--host-outcome", "returned"], ["--cursor", "invalid"]):
+        filtered = _installed(tmp_path, "turns", path, "--text", *selector)
+        assert "Operation " not in filtered.stdout
+    doctor = _installed(tmp_path, "doctor", path)
+    assert doctor.returncode == 0 and "MCP-only" in doctor.stdout
+    assert all(item.event_id in doctor.stdout for item in starts)
+
+
+def test_installed_demo_uses_fresh_paths_and_real_gate_exits(tmp_path):
+    parent = tmp_path / "recording parent's folder"
+    parent.mkdir()
+    alias = Path(sys.executable).with_name("mcp-flightrecorder")
+    version = subprocess.run([str(alias), "--version"], cwd=tmp_path, capture_output=True,
+                             text=True, timeout=20, check=True)
+    assert version.stdout == "mcp-flightrecorder 0.5.22\n"
+    generated = []
+    for command in ([sys.executable, "-I", "-B", "-m", "mcp_flightrecorder.demo"], [str(alias), "demo"]):
+        demo = subprocess.run([*command, "--output-dir", str(parent)], cwd=tmp_path,
+                              capture_output=True, text=True, timeout=20, check=True)
+        assert "Synthetic controlled observations" in demo.stdout
+        commands = [shlex.split(line) for line in demo.stdout.splitlines() if line.startswith("fr gate ")]
+        assert len(commands) == 5
+        assert len([line for line in demo.stdout.splitlines() if line.startswith("uvx --from ")]) == 5
+        folder = Path(commands[0][2]).parent
+        assert folder.is_absolute() and folder.parent == parent.resolve()
+        generated.append(folder)
+        for args, expected in zip(commands, [0, 2, 4, 4, 0], strict=True):
+            result = _installed(tmp_path, *args[1:], "--max-output-bytes", "1024")
+            assert result.returncode == expected, result
+            assert "VERDICT: " + {0: "PASS", 2: "FAIL", 4: "UNKNOWN"}[expected] in result.stdout
+            assert "Answer comparison scope:" in result.stdout and len(result.stdout.encode()) <= 1024
+    assert generated[0] != generated[1]
 
 
 @pytest.fixture
@@ -130,7 +272,7 @@ def test_installed_entrypoint_errors_match_public_python(command_recording, entr
 
 @pytest.mark.parametrize("entry", ["fr", "module"])
 @pytest.mark.parametrize("options,needle", [(["--help"], "snapshot"), (["sql", "--help"], "--params"),
-                                             (["--version"], "0.5.21")], ids=["help", "command-help", "version"])
+                                             (["--version"], "0.5.22")], ids=["help", "command-help", "version"])
 def test_installed_help_and_version_remain_human_text(tmp_path, entry, options, needle):
     process = subprocess.run(_argv(entry) + options, cwd=tmp_path, capture_output=True, text=True, timeout=10)
     check.equal(process.returncode, 0, msg="Explicit help/version is successful human-facing discovery.")
@@ -352,6 +494,6 @@ print(json.dumps({"prefix":sys.prefix,"package":mcp_flightrecorder.__file__,"cli
     for name in ("package", "cli", "reader"):
         check.is_true(Path(observed[name]).resolve().is_relative_to(Path(observed["prefix"]).resolve()),
                       msg="The " + name + " module must come from the installed distribution, never the checkout.")
-    check.equal(observed["version"], "0.5.21", msg="The subprocess exercises this release version.")
+    check.equal(observed["version"], "0.5.22", msg="The subprocess exercises this release version.")
     check.equal(importlib.metadata.version("mcp-flightrecorder"), observed["version"],
                 msg="The direct Python test and isolated CLI probe identify the same installed version.")

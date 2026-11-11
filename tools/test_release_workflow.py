@@ -84,7 +84,7 @@ def validate_workflow(workflow):
     require(inputs["mode"].get("type") == "choice" and inputs["mode"].get("default") == "validate-only"
             and inputs["mode"].get("options") == ["validate-only", "staged-release"], "unsafe mode default")
     require(all(item.get("required") is True for item in inputs.values()), "release identity must be required")
-    require(inputs["release_version"].get("default") == inputs["planned_tag"].get("default") == "0.5.21",
+    require(inputs["release_version"].get("default") == inputs["planned_tag"].get("default") == "0.5.22",
             "incorrect version/tag defaults")
     require(workflow.get("permissions") == READ, "global permissions must be read only")
     require(workflow.get("defaults") == {"run": {"working-directory": "source"}},
@@ -135,7 +135,7 @@ def validate_workflow(workflow):
             require(len(upload) == 1 and upload[0].get("if") is None and upload[0].get("id") == "upload",
                     "both modes must retain exactly one candidate artifact")
             require(upload[0].get("with") == {
-                "name": "mcp-flightrecorder-0.5.21-${{ github.run_id }}-${{ github.run_attempt }}",
+                "name": "mcp-flightrecorder-0.5.22-${{ github.run_id }}-${{ github.run_attempt }}",
                 "path": "${{ runner.temp }}/release-build/bundle/", "if-no-files-found": "error",
                 "include-hidden-files": False, "retention-days": 7,
             }, "candidate artifact must contain only the verified bundle directory")

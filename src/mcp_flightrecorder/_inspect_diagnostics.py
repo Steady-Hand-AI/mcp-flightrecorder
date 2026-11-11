@@ -8,7 +8,7 @@ from ._inspect_records import event_complete, run_record
 from ._inspect_relations import (
     _slot_pointer_state, answer_rows, artifact_row, association_diagnostics_reason,
     compare_tokens, event_row, pointer_exists, pointer_parts,
-    relation_state, request_info,
+    relation_state, request_info, occurrence_uncertainty as _occurrence_uncertainty,
 )
 
 
@@ -45,42 +45,6 @@ def _source_state(ctx, run_id, link):
         return "source_pointer_unavailable"
     if not pointer_exists(json_value(artifact["body_text"]), pointer):
         return "source_pointer_absent"
-    return None
-
-
-def _occurrence_uncertainty(ctx, event, pointer, structure):
-    """Scope recorded association uncertainty to this explicit occurrence.
-
-    Missing locations and omitted diagnostics cannot be assigned to a different
-    message. A replay's first witness has its own message path and position.
-    """
-    details = json_object(event["details_json"])
-    selected = pointer_parts(pointer)
-    message_path = pointer_parts(structure["manifest"]["message_path"])
-    for field in ("unresolved_answers", "message_identity_unavailable"):
-        omitted = details.get(field + "_omitted_count", 0)
-        if type(omitted) is not int or omitted != 0:
-            return "association_diagnostics_omitted"
-        entries = details.get(field, [])
-        if type(entries) is not list:
-            return "association_diagnostics_unavailable"
-        for entry in entries:
-            ctx.check_deadline()
-            if type(entry) is not dict:
-                return "association_diagnostics_unavailable"
-            if field == "unresolved_answers":
-                location = pointer_parts(entry.get("pointer"))
-                if location is None:
-                    return "association_diagnostics_unavailable"
-            else:
-                index = entry.get("message_index")
-                if type(index) is not int or index < 0:
-                    return "association_diagnostics_unavailable"
-                location = [*message_path, str(index)]
-            if location[:len(selected)] == selected or selected[:len(location)] == location:
-                reason = association_diagnostics_reason({field: [entry]})
-                if reason:
-                    return reason
     return None
 
 

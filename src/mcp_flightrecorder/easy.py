@@ -11,6 +11,7 @@ import os
 import weakref
 
 from . import MISSING, Recorder
+from ._recording_path import recording_path
 from .integrations._common import (EvidenceBase, copy_json, policy_retention,
                                    validate_label, validate_retention_policy)
 
@@ -76,6 +77,7 @@ class AgentRecorder:
             if type(value) is not int or value < 1:
                 raise ValueError(name + " must be a positive integer")
         self.path, self.strict = path, strict
+        self._destination = path
         self._retention_policy = validate_retention_policy(retention_policy)
         self.binding_limit, self.prepared_byte_limit = binding_limit, prepared_byte_limit
         self.key_byte_limit = key_byte_limit
@@ -107,15 +109,23 @@ class AgentRecorder:
         return self._started and os.getpid() == self._pid
 
     def start(self, path=MISSING):
-        """Start explicitly, optionally with a new destination after close."""
+        """Start explicitly; directory destinations get a fresh file each time.
+
+        ``path`` preserves explicit file values; directory mode exposes the
+        successfully initialized generation's absolute file.
+        An explicit replacement destination (including disabled ``None``) is kept
+        for later starts; closing never replaces it with a generated filename.
+        """
         if self._started:
             self._note("already_started", "Close the recorder before starting another run.", misuse=True)
             return self
         if path is not MISSING:
-            self.path = path
+            self._destination = path
         self._pid = os.getpid()
         self._generation += 1
-        self._recorder = None if self.path is None else Recorder(self.path, **self._options)
+        destination = None if self._destination is None else recording_path(self._destination)
+        recorder = None if destination is None else Recorder(destination, **self._options)
+        self._recorder, self.path = recorder, destination
         self._started = True
         return self
 

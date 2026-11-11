@@ -503,6 +503,174 @@ def compare_tokens(run_id, projection, left, right, observations):
     return first == second, None
 
 
+def decision_state(ctx, run_id, decision, before):
+    if decision is None:
+        return "unknown", "decision_unavailable"
+    if decision["kind"] != "model.tool_call" or decision["boundary"] != "model":
+        return "fail", "wrong_decision_kind"
+    if decision["sequence"] >= before["sequence"]:
+        return "fail", "decision_order"
+    if event_complete(decision) is not True or decision["model_call_id"] is None:
+        return "unknown", "decision_incomplete"
+    requests = ctx.connection.execute("""SELECT * FROM observed_events
+        WHERE run_id=? AND kind='model.request' AND model_call_id=? LIMIT 2""",
+        (run_id, decision["model_call_id"])).fetchall()
+    if not requests:
+        return "unknown", "decision_request_unavailable"
+    if len(requests) != 1 or requests[0]["sequence"] >= decision["sequence"]:
+        return "fail", "decision_request_conflict"
+    if requests[0]["boundary"] != "model":
+        return "fail", "decision_request_boundary"
+    if event_complete(requests[0]) is not True:
+        return "unknown", "decision_request_incomplete"
+    return "pass", None
+
+
+def occurrence_uncertainty(ctx, event, pointer, structure):
+    """Scope recorded association uncertainty to this explicit occurrence.
+
+    Missing locations and omitted diagnostics cannot be assigned to a different
+    message. A replay's first witness has its own message path and position.
+    """
+    details = json_object(event["details_json"])
+    selected = pointer_parts(pointer)
+    message_path = pointer_parts(structure["manifest"]["message_path"])
+    for field in ("unresolved_answers", "message_identity_unavailable"):
+        omitted = details.get(field + "_omitted_count", 0)
+        if type(omitted) is not int or omitted != 0:
+            return "association_diagnostics_omitted"
+        entries = details.get(field, [])
+        if type(entries) is not list:
+            return "association_diagnostics_unavailable"
+        for entry in entries:
+            ctx.check_deadline()
+            if type(entry) is not dict:
+                return "association_diagnostics_unavailable"
+            if field == "unresolved_answers":
+                location = pointer_parts(entry.get("pointer"))
+                if location is None:
+                    return "association_diagnostics_unavailable"
+            else:
+                index = entry.get("message_index")
+                if type(index) is not int or index < 0:
+                    return "association_diagnostics_unavailable"
+                location = [*message_path, str(index)]
+            if location[:len(selected)] == selected or selected[:len(location)] == location:
+                reason = association_diagnostics_reason({field: [entry]})
+                if reason:
+                    return reason
+    return None
+
+
+def answer_origin(ctx, run_id, answer):
+    """Validate one occurrence, then identify only explicitly supported origin.
+
+    Null result identity is not enough to identify a local attempt. The first
+    binding witness bounds the dispatch interval, even when history is replayed.
+    All lookups use the reader's bounded cache and owned snapshot.
+    """
+    def result(origin="unavailable", status="unknown", reason=None, dispatch=None):
+        return {"origin": origin, "status": status, "reason": reason,
+                "dispatch_event_id": dispatch}
+
+    link = ctx.connection.execute("SELECT * FROM links WHERE run_id=? AND link_id=?",
+                                  (run_id, answer["link_id"])).fetchone()
+    state, reason = relation_state(ctx, run_id, link)
+    if state != "pass":
+        return result(status=state, reason=reason)
+    if answer["association_state"] != "linked":
+        return result(reason=answer["association_state"])
+    decision = event_row(ctx, run_id, link["source_event_id"], observed=True)
+    witness = None
+    for event_id, pointer in ((answer["request_event_id"], answer["target_pointer"]),
+                              (link["witness_event_id"], link["target_pointer"])):
+        structure = request_info(ctx, run_id, event_id)
+        if structure["status"] != "pass":
+            return result(status=structure["status"], reason=structure["reason"])
+        request = structure["event"]
+        if request["boundary"] != "model":
+            return result(status="fail", reason="request_boundary_conflict")
+        state, reason = decision_state(ctx, run_id, decision, request)
+        if state != "pass":
+            return result(status=state, reason=reason)
+        reason = occurrence_uncertainty(ctx, request, pointer, structure)
+        if reason:
+            return result(reason=reason)
+        witness = request
+    details = json_object(link["details_json"])
+    if "result_event_id" not in details:
+        return result(reason="result_identity_unavailable")
+    selected = details["result_event_id"]
+    if selected is not None:
+        if type(selected) is not str or not selected:
+            return result(status="fail", reason="invalid_result_identity")
+        terminal = event_row(ctx, run_id, selected, observed=True)
+        if terminal is None:
+            return result(reason="result_unavailable")
+        if terminal["kind"] != "mcp.response" or terminal["boundary"] != "mcp":
+            return result(status="fail", reason="result_kind_conflict")
+        if event_complete(terminal) is not True:
+            return result(reason="result_incomplete")
+        if terminal["sequence"] >= witness["sequence"]:
+            return result(status="fail", reason="result_witness_order")
+        return result("mcp", "pass")
+
+    # Include declared sources as well as stored joins: a missing link cannot
+    # conceal a competing attempt. Two equal calls remain two occurrences.
+    dispatches = ctx.connection.execute("""SELECT e.* FROM events e
+        WHERE e.run_id=? AND e.kind='host.dispatch' AND e.sequence>? AND e.sequence<?
+          AND (e.event_id IN (SELECT target_event_id FROM links WHERE run_id=?
+               AND relation='dispatch_source' AND source_event_id=?)
+            OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(e.details_json)
+               THEN e.details_json ELSE '{}' END,'$.decision_event_ids') WHERE value=?))
+        ORDER BY e.sequence,e.event_id LIMIT 2""",
+        (run_id, decision["sequence"], witness["sequence"], run_id,
+         decision["event_id"], decision["event_id"])).fetchall()
+    if len(dispatches) != 1:
+        return result(reason="local_dispatch_unavailable" if not dispatches else "local_attempt_ambiguous")
+    dispatch = event_row(ctx, run_id, dispatches[0]["event_id"], observed=True)
+    if dispatch is None or event_complete(dispatch) is not True:
+        return result(reason="dispatch_incomplete")
+    if dispatch["boundary"] != "host":
+        return result(status="fail", reason="wrong_dispatch_kind")
+    if dispatch["state"] != "local":
+        return result(reason="local_execution_unproven")
+    sources = json_object(dispatch["details_json"]).get("decision_event_ids")
+    if type(sources) is not list or any(type(value) is not str or not value for value in sources):
+        return result(reason="dispatch_sources_unavailable")
+    source_ids = set()
+    for source_link in ctx.connection.execute("""SELECT * FROM links WHERE run_id=?
+            AND relation='dispatch_source' AND target_event_id=? ORDER BY link_id""",
+            (run_id, dispatch["event_id"])):
+        ctx.check_deadline()
+        state, reason = relation_state(ctx, run_id, source_link)
+        if state != "pass":
+            return result(status=state, reason=reason)
+        source = event_row(ctx, run_id, source_link["source_event_id"], observed=True)
+        state, reason = decision_state(ctx, run_id, source, dispatch)
+        if state != "pass":
+            return result(status=state, reason=reason)
+        source_ids.add(source_link["source_event_id"])
+    if set(sources) != source_ids or decision["event_id"] not in source_ids:
+        return result(status="fail", reason="dispatch_sources_conflict")
+    # Propagated operations need not carry a dispatch identity. Check both
+    # operation rows and observations, including damaged missing endpoints.
+    competing = ctx.connection.execute("""SELECT 1 FROM operations o LEFT JOIN events e
+        ON e.run_id=o.run_id AND e.event_id=o.start_event_id
+        WHERE o.run_id=? AND o.method='tools/call'
+          AND (o.decision_id=? OR o.dispatch_event_id=?)
+          AND (e.sequence IS NULL OR (e.sequence>? AND e.sequence<?)) LIMIT 1""",
+        (run_id, decision["decision_id"], dispatch["event_id"], decision["sequence"], witness["sequence"])).fetchone()
+    if competing is None:
+        competing = ctx.connection.execute("""SELECT 1 FROM events WHERE run_id=?
+            AND kind IN ('mcp.request','mcp.response') AND method='tools/call'
+            AND decision_id=? AND sequence>? AND sequence<? LIMIT 1""",
+            (run_id, decision["decision_id"], decision["sequence"], witness["sequence"])).fetchone()
+    if competing is not None:
+        return result(reason="competing_mcp_execution")
+    return result("local", "pass", dispatch=dispatch["event_id"])
+
+
 def _answer_descriptor(ctx, run_id, link_id):
     """Memoize stable evidence, never an occurrence's completeness or diagnostics."""
     def load():
@@ -595,6 +763,9 @@ def answer_rows(ctx, run_id, request_ids=None, decision_ids=None, *, limit=None)
         answer["association_state"] = association_state
         answer["result_event_id"] = result_id
         answer.update(text_equal=equal, comparison_reason=comparison_reason)
+        origin = answer_origin(ctx, run_id, answer)
+        answer.update(origin=origin["origin"], origin_reason=origin["reason"],
+                      origin_status=origin["status"], dispatch_event_id=origin["dispatch_event_id"])
         yield answer
 
 

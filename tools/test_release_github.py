@@ -162,9 +162,9 @@ class IdentityTests(unittest.TestCase):
                     github._ci_identity(client, COMMIT)
 
     def test_dispatch_inputs_refuse_noncanonical_or_wrong_origin(self):
-        for field, value in [("RELEASE_VERSION", "0.5.22"), ("PLANNED_TAG", "v0.5.21"),
+        for field, value in [("RELEASE_VERSION", "0.5.23"), ("PLANNED_TAG", "v0.5.22"),
                              ("EXPECTED_COMMIT", "a" * 39), ("EXPECTED_COMMIT", "A" * 40),
-                             ("GITHUB_EVENT_NAME", "push"), ("GITHUB_REF", "refs/tags/0.5.21"),
+                             ("GITHUB_EVENT_NAME", "push"), ("GITHUB_REF", "refs/tags/0.5.22"),
                              ("GITHUB_REPOSITORY", "other/repo"), ("GITHUB_WORKFLOW_SHA", "d" * 40),
                              ("GITHUB_WORKFLOW_REF", "untrusted"), ("RELEASE_MODE", "direct")]:
             with self.subTest(field=field, value=value):
@@ -202,7 +202,7 @@ class IdentityTests(unittest.TestCase):
             repo = Path(temporary)
             (repo / ".github/workflows").mkdir(parents=True)
             (repo / github.WORKFLOW_PATH).write_bytes(WORKFLOW_BYTES)
-            (repo / "pyproject.toml").write_text('[project]\nname="mcp-flightrecorder"\nversion="0.5.21"\n')
+            (repo / "pyproject.toml").write_text('[project]\nname="mcp-flightrecorder"\nversion="0.5.22"\n')
             def git(*args):
                 return subprocess.check_output(["git", "-C", str(repo), *args], text=True, stderr=subprocess.DEVNULL).strip()
             git("init", "-q")
@@ -242,7 +242,7 @@ class PromotionClient(IdentityClient):
             "head_repository": {"id": 80, "full_name": github.REPOSITORY},
         }
         self.values[github.API_ROOT + "/actions/artifacts/60"] = {
-            "id": 60, "expired": False, "name": "mcp-flightrecorder-0.5.21-20-1", "digest": "sha256:" + "d" * 64,
+            "id": 60, "expired": False, "name": "mcp-flightrecorder-0.5.22-20-1", "digest": "sha256:" + "d" * 64,
             "created_at": "2026-01-01T00:05:00Z",
             "workflow_run": {"id": 20, "head_sha": COMMIT, "head_branch": "main", "repository_id": 80,
                              "head_repository_id": 80},
@@ -292,7 +292,7 @@ class PromotionArtifactTests(unittest.TestCase):
                 client = PromotionClient()
                 artifact = client.values[github.API_ROOT + "/actions/artifacts/60"]
                 if fault == "wrong_name":
-                    artifact["name"] = "mcp-flightrecorder-0.5.21-20-2"
+                    artifact["name"] = "mcp-flightrecorder-0.5.22-20-2"
                 elif fault == "expired":
                     artifact["expired"] = True
                 elif fault == "other_run":

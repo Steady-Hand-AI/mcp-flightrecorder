@@ -3,10 +3,12 @@ import asyncio
 from contextlib import closing
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -194,6 +196,33 @@ def test_directory_generations_are_fresh_and_configuration_stays_inert(tmp_path,
         rec.start()
     rec.start(None).close()
     assert rec.path is None and len(list(directory.iterdir())) == 2
+
+
+@pytest.mark.parametrize('alternate', [False, True], ids=['native', 'alternate-policy'])
+def test_missing_directory_leaf_recognizes_supported_separators(tmp_path, monkeypatch, alternate):
+    from mcp_flightrecorder import _recording_path as paths
+
+    separator = os.sep
+    if alternate:
+        # Isolate suffix policy only; this is not a native Windows filesystem test.
+        monkeypatch.setattr(paths, 'os', SimpleNamespace(
+            sep='\\', altsep='/', fspath=os.fspath, getpid=os.getpid))
+        separator = '/'
+    directory = tmp_path / 'missing leaf'
+    requested = str(directory) + separator
+    selected = paths.recording_path(requested)
+    assert isinstance(selected, Path) and selected.is_absolute()
+    assert selected.parent == directory and selected.suffix == '.sqlite'
+    assert directory.is_dir() and directory.stat().st_mode & 0o777 == 0o700
+    assert not selected.exists() and list(directory.iterdir()) == []
+    following = paths.recording_path(requested)
+    assert following != selected and following.parent == directory and not following.exists()
+    # The path helper has reserved nothing; only the actual writer creates the DB.
+    with AgentRecorder(selected) as rec:
+        assert rec.path is selected and selected.is_file()
+    assert selected.stat().st_mode & 0o777 == 0o600
+    assert rows(selected, 'runs')[0]['close_state'] == 'clean'
+    assert list(directory.iterdir()) == [selected]
 
 
 def test_directory_disabled_and_missing_ancestors_do_not_create_paths(tmp_path):

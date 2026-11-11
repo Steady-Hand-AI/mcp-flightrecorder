@@ -11,7 +11,7 @@ import zipfile
 import check_package
 
 REPOSITORY = "Steady-Hand-AI/mcp-flightrecorder"
-VERSION = TAG = "0.5.21"
+VERSION = TAG = "0.5.22"
 WORKFLOW_PATH = ".github/workflows/publish.yml"
 WHEEL = f"mcp_flightrecorder-{VERSION}-py3-none-any.whl"
 SDIST = f"mcp_flightrecorder-{VERSION}.tar.gz"

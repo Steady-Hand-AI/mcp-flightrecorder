@@ -1,10 +1,10 @@
 # Inspection API and CLI
 
-**Package 0.5.21 · schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`.** Standard-library readers serve Python and the CLI. They expose retained observations, explicit attribution and uncertainty. They do not score agents, write findings, repair recordings or infer provenance.
+**Package 0.5.22 · schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`.** Standard-library readers serve Python and the CLI. They expose retained observations, explicit attribution and uncertainty. They do not score agents, write findings, repair recordings or infer provenance.
 
 ## Start with a readable investigation
 
-For a complete file/run selection and evidence-policy workflow, see [investigating a recording](agent-workflow.md). The directory and scope/text conveniences described here are unreleased source features; released 0.5.21 retains its earlier behavior.
+For a complete file/run selection and evidence-policy workflow, see [investigating a recording](agent-workflow.md). Version 0.5.22 adds directory selection and explicit answer-scope/readable-gate conveniences.
 
 ```sh
 fr doctor recording.sqlite
@@ -244,7 +244,7 @@ One owned read transaction selects the sole run when `run_id` is omitted, valida
 
 Every submitted answer occurrence must have valid current and original-witness links. When a text comparison is required, compatible original raw text must match, or the exact occurrence must have fully validated declared preparation whose original prepared text matches the submitted text. The same-run endpoints, order, complete declared sources, selected source and original tokens must all be available and consistent. Explicit unresolved attribution or omitted relevant diagnostics cannot be promoted into positive evidence. Preparation preserves raw `text_equal`/`text_mismatch` and does not verify semantic equivalence.
 
-`answers="all"` is the unchanged default. Explicit `answers="mcp"` (CLI `--answers mcp`) excludes only the local result-text comparison of an independently validated, unambiguous local occurrence. An explicit null result alone is insufficient: current/original witnesses, authoritative endpoints, complete relevant local dispatch and absence of competing dispatch/MCP evidence must agree. Malformed result IDs, missing selected MCP results and shared-decision retry ambiguity remain unknown. Other occurrence validation, coverage, health, lifecycle, integrity and attribution checks still run over the entire population. Raw `text_equal` and comparison reasons are unchanged; activity minima still count all observed activity.
+`answers="all"` is the unchanged default. Explicit `answers="mcp"` (CLI `--answers mcp`) excludes only the local result-text comparison of an independently validated, unambiguous local occurrence. An explicit null result alone is insufficient: current/original witnesses, authoritative endpoints, complete relevant local dispatch and absence of competing dispatch/MCP evidence must agree. Malformed result identities produce FAIL (`invalid_result_identity`); missing selected MCP results and shared-decision retry ambiguity remain UNKNOWN. Other occurrence validation, coverage, health, lifecycle, integrity and attribution checks still run over the entire population. Raw `text_equal` and comparison reasons are unchanged; activity minima still count all observed activity.
 
 `excluded_count` counts excluded answer occurrences, including replay. `excluded` and `answer_witnesses` are bounded samples with `excluded_omitted_count` and `answer_witnesses_omitted_count`, not reduced evaluation populations. `mcp_answer_count` counts demonstrably MCP-origin occurrences. Report those exclusions as unverified local comparisons, not successes. Under explicitly selected MCP scope, no demonstrably MCP-origin answer comparisons gives UNKNOWN `no_mcp_answers_in_scope`, unless an independent failure already establishes FAIL. Default-scope model-only behavior is unchanged.
 

@@ -18,7 +18,8 @@ def recording_path(destination):
         path = Path(raw).absolute()
     except (TypeError, ValueError) as error:
         raise ValueError('path must name a new local recording') from error
-    if raw and (path.is_dir() or raw.endswith(os.sep)):
+    separators = (os.sep,) if os.altsep is None else (os.sep, os.altsep)
+    if raw and (path.is_dir() or raw.endswith(separators)):
         path.mkdir(mode=0o700, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
         return path / f'recording-{stamp}-{os.getpid()}-{secrets.token_hex(8)}.sqlite'

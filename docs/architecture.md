@@ -1,12 +1,14 @@
 # Architecture
 
-**Source version 0.5.23 · SQLite schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`**
+**Source version 0.5.24 · SQLite schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`**
 
 MCP Flight Recorder captures explicit observations at model, host and MCP boundaries. The host owns native work; the recorder owns bounded capture and its recording. The [HTML map](architecture.html) renders the same implemented behavior offline. [Detailed control flows](#detailed-control-flows) include the source-linked core views plus integration, diagnosis and fixed-file MCP/gate entry paths and the stdio recording bridge, with closure and snapshot drawn separately. This map covers the responsibilities and material branches of the runtime modules, the schema and build seam; it is not a line-by-line call graph. Public details are in [Easy integration](easy-integration.md), [Capture](capture.md), [Inspection](inspection.md), [Integrations](integrations.md), [MCP inspection](mcp-inspection.md) and [Recording proxy](proxy.md).
 
 Version 0.5.22 introduced first-run conveniences: the installed synthetic demo, directory inputs, strict proxy startup and explicit gate answer scope. Their flows are shown in [M12](#m12--first-run-path-selection-and-startup); fixture verdicts do not establish application adoption.
 
-Version 0.5.23 adds the evidence assertion and regression example described in [§13](#13-evidence-assertion-and-independent-behavior).
+Version 0.5.23 introduced the evidence assertion and regression example described in [§13](#13-evidence-assertion-and-independent-behavior).
+
+Version 0.5.24 adds a [complete OpenAI and MCP facade example](openai_mcp.md). It reuses the existing capture, adapter and assertion paths.
 
 ## 1. Responsibilities and data flow
 
@@ -271,7 +273,7 @@ The read-only GitHub Actions workflow runs the explicit SDK-free selection on Li
 
 ### Staged publication
 
-The manual `publish.yml` workflow admits main-only `validate-only` or explicit `staged-release` dispatch with a full reviewed commit, version 0.5.23 and planned tag 0.5.23. Both modes require completed successful main-push CI for that exact commit before candidate preparation. Staged release additionally requires that bare tag to exist as an annotated tag at the approved commit. A clean source export builds one original wheel/sdist pair, with package guards, strict Twine, installed smoke and an sdist-rebuilt wheel comparison. Both modes store a flat candidate containing the pair, `manifest.json` and `SHA256SUMS`; source/workflow identity, exact main-push CI and artifact hashes remain bound to the run.
+The manual `publish.yml` workflow admits main-only `validate-only` or explicit `staged-release` dispatch with a full reviewed commit, version 0.5.24 and planned tag 0.5.24. Both modes require completed successful main-push CI for that exact commit before candidate preparation. Staged release additionally requires that bare tag to exist as an annotated tag at the approved commit. A clean source export builds one original wheel/sdist pair, with package guards, strict Twine, installed smoke and an sdist-rebuilt wheel comparison. Both modes store a flat candidate containing the pair, `manifest.json` and `SHA256SUMS`; source/workflow identity, exact main-push CI and artifact hashes remain bound to the run.
 
 Validate-only ends after candidate storage. Staged publication promotes the same bytes through the `testpypi`, `pypi` and `github-release` environments. A release reviewer inspects this run's candidate before TestPyPI approval; PyPI follows TestPyPI download/install verification and a second environment approval. GitHub draft/published-state verification follows PyPI download/install verification. Identity is rechecked after waits. Only proven identical existing files permit partial resume; conflicts stop without deleting, replacing or retagging public state. These are configured release paths, not an observed publication claim. [Releasing](releasing.md) contains exact setup and operator steps.
 
@@ -336,6 +338,8 @@ Prepared text is detached at bind time and replayed through existing insertion a
 Facade development notes are bounded local reason/hint/count records. Normal capture failure preserves host work; strict mode diagnoses integration misuse, while capacity/storage loss never becomes an execution gate. Local notes are not all persisted. Doctor reads only recorded facts through the existing owned read transaction. It reports explicit limits, run counters and event locations without claiming that a page proves complete capture or identifies a unique absent call.
 
 A positive preparation explanation validates same-run authoritative endpoints and ordering, insertion/answer membership, every declared source, and compatible original selected-text tokens. Raw `text_equal`, `text_mismatch`, statistics and inspection-v1 remain unchanged. Unavailable original evidence stays unknown. Matching prepared/submitted text never verifies semantic equivalence. The separate `mfr.diagnose/1` report is not a gate. Complete-run policy belongs to `inspect.gate`; the optional MCP server presents bounded readers. The separate [stdio recording proxy](proxy.md) observes MCP-only traffic without inventing host/model attribution. Automatic storage recovery is not implemented. See [the integration recipes](easy-integration.md) and [diagnostic contract](inspection.md#diagnostic-report-and-preparation).
+
+The source-shipped [OpenAI and MCP host](../examples/openai_mcp.py) uses these same facade boundaries with native clients. Its [peer module](../examples/openai_mcp_peers.py) supplies deterministic services separately from the application flow. The host selects the native model choice, executes its MCP invocation and binds the formatted answer to the next model request. An example-local text formatter preserves ordered blocks and declares only intended string preparation. After recording closes, the existing evidence assertion and an independent serialized-request application expectation report separate outcomes. The [complete recipe](openai_mcp.md) installs the matching package and source examples, then runs outside the source directory. These are example-level uses of M09 and M13, with existing runtime ownership and policies.
 
 ## 12. Fixed-file MCP inspection and complete-run policy
 

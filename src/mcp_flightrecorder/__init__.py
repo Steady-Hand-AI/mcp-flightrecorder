@@ -7,5 +7,5 @@ from ._recorder import Recorder
 from ._types import RecorderError
 from ._values import MISSING
 
-__version__ = "0.5.23"
+__version__ = "0.5.24"
 __all__ = ["Recorder", "RecorderError", "MISSING"]

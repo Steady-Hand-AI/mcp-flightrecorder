@@ -45,8 +45,8 @@ print(sys.version, sqlite3.sqlite_version, sys.executable)
 PYTHON
 mfr_work=$(mktemp -d /tmp/mfr-proxy-XXXXXX)
 "$mfr_python" -m venv "$mfr_work/env"
-"$mfr_work/env/bin/python" -m pip install 'mcp-flightrecorder[mcp]==0.5.23'
-git clone --depth 1 --branch 0.5.23 https://github.com/Steady-Hand-AI/mcp-flightrecorder.git "$mfr_work/source"
+"$mfr_work/env/bin/python" -m pip install 'mcp-flightrecorder[mcp]==0.5.24'
+git clone --depth 1 --branch 0.5.24 https://github.com/Steady-Hand-AI/mcp-flightrecorder.git "$mfr_work/source"
 mfr_source="$mfr_work/source"
 "$mfr_work/env/bin/python" -m pip check
 cd "$mfr_work"
@@ -94,7 +94,7 @@ cat proxy.stderr
 "$mfr_work/env/bin/fr" check content.sqlite --expect mcp
 ```
 
-Alternatively, extract `mcp_flightrecorder-0.5.23.tar.gz` from the [PyPI release files](https://pypi.org/project/mcp-flightrecorder/0.5.23/#files) and set `mfr_source` to its absolute extracted path instead of cloning. For a local candidate, install its exact matching wheel with the `[mcp]` extra and use its clean source export in place of the two public acquisition steps.
+Alternatively, extract `mcp_flightrecorder-0.5.24.tar.gz` from the [PyPI release files](https://pypi.org/project/mcp-flightrecorder/0.5.24/#files) and set `mfr_source` to its absolute extracted path instead of cloning. For a local candidate, install its exact matching wheel with the `[mcp]` extra and use its clean source export in place of the two public acquisition steps.
 
 The client code is the same for each launch; only its server argument vector changes. Omitting `--record` forwards without creating a database. With recording enabled, the default is **metadata**, which omits bodies. `--capture content` explicitly allows retained tool arguments/results and may expose sensitive data. Names, IDs and other metadata can remain sensitive in either mode. Every explicit recording file must be fresh; an existing file is never overwritten. Directory mode chooses a fresh file for each launch.
 

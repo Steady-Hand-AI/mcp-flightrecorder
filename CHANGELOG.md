@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.5.24
+
+- Add a complete source-shipped OpenAI and MCP example using the existing facade, with deterministic peers, preserved text-block formatting and independent evidence/application checks.
+- Add a matching pinned-package and source-archive walkthrough that keeps native host responsibilities and preparation limits explicit.
+
 ## 0.5.23
 
 - Add `testing.assert_evidence` for ordinary tests, using the existing gate once. Return passing evidence, raise `AssertionError` for completed FAIL or UNKNOWN, and preserve reader reasons in `EvidenceReadError` for unavailable results.

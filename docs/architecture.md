@@ -1,10 +1,12 @@
 # Architecture
 
-**Source version 0.5.22 · SQLite schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`**
+**Source version 0.5.23 · SQLite schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`**
 
 MCP Flight Recorder captures explicit observations at model, host and MCP boundaries. The host owns native work; the recorder owns bounded capture and its recording. The [HTML map](architecture.html) renders the same implemented behavior offline. [Detailed control flows](#detailed-control-flows) include the source-linked core views plus integration, diagnosis and fixed-file MCP/gate entry paths and the stdio recording bridge, with closure and snapshot drawn separately. This map covers the responsibilities and material branches of the runtime modules, the schema and build seam; it is not a line-by-line call graph. Public details are in [Easy integration](easy-integration.md), [Capture](capture.md), [Inspection](inspection.md), [Integrations](integrations.md), [MCP inspection](mcp-inspection.md) and [Recording proxy](proxy.md).
 
-Version 0.5.22 includes first-run conveniences: the installed synthetic demo, directory inputs, strict proxy startup and explicit gate answer scope. Their flows are shown in [M12](#m12--first-run-path-selection-and-startup); fixture verdicts do not establish application adoption.
+Version 0.5.22 introduced first-run conveniences: the installed synthetic demo, directory inputs, strict proxy startup and explicit gate answer scope. Their flows are shown in [M12](#m12--first-run-path-selection-and-startup); fixture verdicts do not establish application adoption.
+
+Version 0.5.23 adds the evidence assertion and regression example described in [§13](#13-evidence-assertion-and-independent-behavior).
 
 ## 1. Responsibilities and data flow
 
@@ -22,6 +24,7 @@ The host-owned `AgentRecorder` conversation facade manages explicit selected-att
 | Reader | [`inspect.py`](../src/mcp_flightrecorder/inspect.py), [`_inspect_common.py`](../src/mcp_flightrecorder/_inspect_common.py), [`_inspect_records.py`](../src/mcp_flightrecorder/_inspect_records.py), [`_inspect_relations.py`](../src/mcp_flightrecorder/_inspect_relations.py), [`_inspect_checks.py`](../src/mcp_flightrecorder/_inspect_checks.py), [`_inspect_navigation.py`](../src/mcp_flightrecorder/_inspect_navigation.py), [`_inspect_query.py`](../src/mcp_flightrecorder/_inspect_query.py), [`_inspect_slice.py`](../src/mcp_flightrecorder/_inspect_slice.py) | One bounded read transaction and deadline per invocation; shared projections and complete retained-fact counts; static schema metadata needs no connection |
 | Diagnosis and text | [`_inspect_diagnostics.py`](../src/mcp_flightrecorder/_inspect_diagnostics.py), [`_inspect_text.py`](../src/mcp_flightrecorder/_inspect_text.py) | Bounded gaps/location/hints, fully validated selected preparation comparisons, and escaped readable views; no whole-run gate |
 | Evidence gate | [`_inspect_gate.py`](../src/mcp_flightrecorder/_inspect_gate.py) | Explicit coverage/activity expectations, complete-population validation in one read transaction, and bounded witnesses independent of verdict |
+| Evidence assertion | [`testing.py`](../src/mcp_flightrecorder/testing.py) | Public test helper: strict local-policy Boolean, one gate call, returned PASS or distinct assertion/read errors |
 | Optional MCP inspector | [`_mcp_inspect.py`](../src/mcp_flightrecorder/_mcp_inspect.py) | Fixed stable portable path, five no-content tools, opt-in payload tool, one static schema resource and protocol-only stdout |
 | Stdio recording proxy | [`_proxy.py`](../src/mcp_flightrecorder/_proxy.py) | SDK-free POSIX bridge owning one child and pipe buffers; independent bounded observer owns frame copies, direction/ID correlation and core operation tickets; stderr reports capture loss |
 | CLI and copy | [`cli.py`](../src/mcp_flightrecorder/cli.py), [`__main__.py`](../src/mcp_flightrecorder/__main__.py), [`_snapshot.py`](../src/mcp_flightrecorder/_snapshot.py) | Shared CLI directory selection, JSON and opt-in readable views, explicit latest/run selection and shared public Python/CLI portable snapshot utility |
@@ -268,7 +271,7 @@ The read-only GitHub Actions workflow runs the explicit SDK-free selection on Li
 
 ### Staged publication
 
-The manual `publish.yml` workflow admits main-only `validate-only` or explicit `staged-release` dispatch with a full reviewed commit, version 0.5.22 and planned tag 0.5.22. Both modes require completed successful main-push CI for that exact commit before candidate preparation. Staged release additionally requires that bare tag to exist as an annotated tag at the approved commit. A clean source export builds one original wheel/sdist pair, with package guards, strict Twine, installed smoke and an sdist-rebuilt wheel comparison. Both modes store a flat candidate containing the pair, `manifest.json` and `SHA256SUMS`; source/workflow identity, exact main-push CI and artifact hashes remain bound to the run.
+The manual `publish.yml` workflow admits main-only `validate-only` or explicit `staged-release` dispatch with a full reviewed commit, version 0.5.23 and planned tag 0.5.23. Both modes require completed successful main-push CI for that exact commit before candidate preparation. Staged release additionally requires that bare tag to exist as an annotated tag at the approved commit. A clean source export builds one original wheel/sdist pair, with package guards, strict Twine, installed smoke and an sdist-rebuilt wheel comparison. Both modes store a flat candidate containing the pair, `manifest.json` and `SHA256SUMS`; source/workflow identity, exact main-push CI and artifact hashes remain bound to the run.
 
 Validate-only ends after candidate storage. Staged publication promotes the same bytes through the `testpypi`, `pypi` and `github-release` environments. A release reviewer inspects this run's candidate before TestPyPI approval; PyPI follows TestPyPI download/install verification and a second environment approval. GitHub draft/published-state verification follows PyPI download/install verification. Identity is rechecked after waits. Only proven identical existing files permit partial resume; conflicts stop without deleting, replacing or retagging public state. These are configured release paths, not an observed publication claim. [Releasing](releasing.md) contains exact setup and operator steps.
 
@@ -345,6 +348,14 @@ Every tool delegates to the existing reader with a per-call owned transaction, d
 Gate expectations and observed counts are retained with complete pass/fail/unknown status. Default `answers="all"` is unchanged. Explicit `answers="mcp"` excludes only the result-text comparison of independently validated, unambiguous local occurrences. Shared validators still require authoritative same-run endpoints, current/original witnesses and complete relevant dispatch evidence; malformed result identities produce FAIL (`invalid_result_identity`), while missing selected MCP results, competing MCP evidence and retry ambiguity stay UNKNOWN. All other integrity, coverage, health and attribution checks remain. Exclusions count occurrences, including replay, and have bounded samples; raw facts and activity minima are unchanged. No demonstrably MCP-origin answer comparison under explicit MCP scope yields UNKNOWN, unless another failure already establishes FAIL. Excluded local forwarding is not verified.
 
 Witness samples can shrink without limiting evaluation. A deadline, required-output failure or incomplete evidence cannot pass. A fully recorded tool error is not itself capture failure. Valid preparation does not clear raw mismatch or prove semantic equivalence. Text rendering consumes this same completed result; it never builds a verdict from a doctor page. This policy checks host-integrated captured evidence, not answer quality or absence of unobserved calls. See [the actual client walkthrough](mcp-inspection.md), [agent workflow](agent-workflow.md) and [gate contract](inspection.md#evidence-gate).
+
+## 13. Evidence assertion and independent behavior
+
+`testing.assert_evidence` is a standard-library wrapper around `inspect.gate`. It accepts one explicit recording file, forwards `run` as the gate run selector and uses the existing default expected model/host/MCP boundaries. `min_activity=None` creates a fresh answer-occurrence minimum. Explicit policies retain their validation and stay unchanged. Only exact Boolean `allow_local_tools=True` selects conservative MCP answer scope. Invalid types raise `EvidenceReadError` with `invalid_allow_local_tools` before gate evaluation.
+
+A valid invocation calls the gate once. Completed PASS returns its existing result, including exclusions. Completed FAIL/UNKNOWN raises `AssertionError` using the bounded gate renderer. An `ok=False` read/configuration/timeout/output result becomes `EvidenceReadError` with its original reason. Other programmer/process-control exceptions propagate. The helper retains existing reader transaction/deadline ownership, policy decisions and schema.
+
+The source-shipped regression example executes its current host function with deterministic synthetic inputs for each capture case, then checks a fresh recording and the application result independently. Application expectations come from the requirement. Tests expose undeclared mutation, faithfully declared but incorrect preparation and unavailable evidence. A positive mixed local/MCP case demonstrates explicit local exclusions. Together, the independent assertions catch forwarding defects and distinguish evidence completeness from application correctness. The [regression walkthrough](agent-workflow.md#run-the-source-shipped-regression-example) runs these source files against an installed wheel outside the checkout.
 
 ## Detailed control flows
 
@@ -878,4 +889,25 @@ flowchart LR
     Select --> Read["Existing reader / snapshot source;<br/>failure has no fallback"]
     Demo["Installed demo: no SDK / provider"] --> Fixtures["Fresh synthetic fixtures;<br/>public capture and portable close"]
     Fixtures --> Commands["Printed gate commands;<br/>default policy and explicit exclusions"]
+```
+
+### M13 — One gate assertion and independent regression checks
+
+**Entrypoints:** [`assert_evidence`, `EvidenceReadError`](../src/mcp_flightrecorder/testing.py), [`inspect.gate`](../src/mcp_flightrecorder/inspect.py), [`render`](../src/mcp_flightrecorder/_inspect_text.py), [regression host](../examples/regression/host.py), [ordinary example tests](../examples/regression/test_host.py).
+
+**Invariants:** One valid helper call evaluates the gate once. Completed negative evidence and unavailable reads use different exception types. Default all-answer policy is preserved. Explicit local exclusions leave missing or ambiguous MCP evidence unresolved. Every capture case runs current host behavior afresh. Evidence and independent application assertions remain separately observable. A faithful wrong answer can pass evidence and fail behavior.
+
+```mermaid
+flowchart LR
+    Input["Explicit fresh file + intended policy"] --> Boolean{"Exact local-policy Boolean?"}
+    Boolean -->|invalid| ReadError["EvidenceReadError with original reason"]
+    Boolean -->|valid| Gate["Existing gate once with owned read / deadline"]
+    Gate -->|completed PASS| Return["Return result + scope + exclusions"]
+    Gate -->|completed FAIL / UNKNOWN| Assert["AssertionError with bounded existing text"]
+    Gate -->|ok=False| ReadError
+    Host["Execute current host with synthetic stub"] --> Recording["Fresh recording per test"]
+    Recording --> Input
+    Host --> Actual["Actual application result"]
+    Expected["Independent requirement"] --> Behavior["Application assertion, separate from evidence"]
+    Actual --> Behavior
 ```

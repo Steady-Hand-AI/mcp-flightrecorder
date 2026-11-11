@@ -6,7 +6,7 @@ The host selects `answer` with `{}` from the first native model response, execut
 
 ## Install the matching package and source
 
-The example is shipped at `examples/tool_roundtrip.py` in the [0.5.22 source tag](https://github.com/Steady-Hand-AI/mcp-flightrecorder/tree/0.5.22) and source distribution. It is not a wheel entry point. Install the matching package into a fresh environment, then run the source example from outside its source directory. No source directory needs to be added to the package import path.
+The example is shipped at `examples/tool_roundtrip.py` in the [0.5.23 source tag](https://github.com/Steady-Hand-AI/mcp-flightrecorder/tree/0.5.23) and source distribution. It is not a wheel entry point. Install the matching package into a fresh environment, then run the source example from outside its source directory. No source directory needs to be added to the package import path.
 
 Select a supported GIL-enabled CPython 3.11+ using `MFR_PYTHON` if `python3` is not your intended interpreter. The commands below share one shell session.
 
@@ -33,13 +33,13 @@ Choose one of the following installation routes, then continue to **Run the exam
 Install the pinned package and its SDK extras from PyPI, then obtain the example from the matching source tag.
 
 ```sh
-"$mfr_work/env/bin/python" -m pip install 'mcp-flightrecorder[openai-chat,mcp]==0.5.22' \
+"$mfr_work/env/bin/python" -m pip install 'mcp-flightrecorder[openai-chat,mcp]==0.5.23' \
     'httpx2>=2.15.1' 'mcp-types>=2.3.0'
-git clone --depth 1 --branch 0.5.22 https://github.com/Steady-Hand-AI/mcp-flightrecorder.git "$mfr_work/source"
+git clone --depth 1 --branch 0.5.23 https://github.com/Steady-Hand-AI/mcp-flightrecorder.git "$mfr_work/source"
 mfr_source="$mfr_work/source"
 ```
 
-Alternatively, extract `mcp_flightrecorder-0.5.22.tar.gz` from the [PyPI release files](https://pypi.org/project/mcp-flightrecorder/0.5.22/#files) and set `mfr_source` to the absolute path of its `mcp_flightrecorder-0.5.22` directory. The example has the same `examples/tool_roundtrip.py` location in that source distribution.
+Alternatively, extract `mcp_flightrecorder-0.5.23.tar.gz` from the [PyPI release files](https://pypi.org/project/mcp-flightrecorder/0.5.23/#files) and set `mfr_source` to the absolute path of its `mcp_flightrecorder-0.5.23` directory. The example has the same `examples/tool_roundtrip.py` location in that source distribution.
 
 ### Contributor or candidate wheel
 
@@ -47,7 +47,7 @@ For local candidate validation, use the [contributor build recipe](testing.md#1-
 
 ```sh
 mfr_source=/absolute/path/to/matching-source
-mfr_wheel=/absolute/path/to/mcp_flightrecorder-0.5.22-py3-none-any.whl
+mfr_wheel=/absolute/path/to/mcp_flightrecorder-0.5.23-py3-none-any.whl
 test -f "$mfr_wheel"
 "$mfr_work/env/bin/python" -m pip install "${mfr_wheel}[openai-chat,mcp]" \
     'httpx2>=2.15.1' 'mcp-types>=2.3.0'

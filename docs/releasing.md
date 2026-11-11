@@ -1,6 +1,6 @@
 # Releasing
 
-**Version and tag `0.5.22` · Python 3.11+ · SQLite schema 6.**
+**Version and tag `0.5.23` · Python 3.11+ · SQLite schema 6.**
 
 The manual [publish workflow](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/.github/workflows/publish.yml) prepares one wheel/sdist pair and can promote that pair through TestPyPI, PyPI and GitHub. Source installation remains documented in the [README](../README.md). The existence of this workflow or a candidate artifact does not establish that a registry release has occurred.
 
@@ -12,12 +12,12 @@ The manual [publish workflow](https://github.com/Steady-Hand-AI/mcp-flightrecord
 |---|---|
 | `mode` | `validate-only` (default), or explicit `staged-release` |
 | `expected_commit` | The full lowercase 40-character reviewed commit SHA currently on `main` |
-| `release_version` | `0.5.22` |
-| `planned_tag` | `0.5.22`, without a `v` prefix |
+| `release_version` | `0.5.23` |
+| `planned_tag` | `0.5.23`, without a `v` prefix |
 
 Dispatch either mode from `main` after the required exact-commit main-push CI has succeeded. Both modes bind the checkout, exported source and package metadata to the supplied identity. `validate-only` builds, checks and stores the public candidate artifact; it does not upload to a registry, create or move a tag, create a GitHub Release, or change repository settings.
 
-`staged-release` additionally requires an existing annotated `0.5.22` tag that peels to the exact reviewed commit. Create that tag only under the release maintainer's separate authorization. Main, tag, workflow and candidate identity are checked again after approval waits and before consequential stages. If the source identity changes, stop and review the new state.
+`staged-release` additionally requires an existing annotated `0.5.23` tag that peels to the exact reviewed commit. Create that tag only under the release maintainer's separate authorization. Main, tag, workflow and candidate identity are checked again after approval waits and before consequential stages. If the source identity changes, stop and review the new state.
 
 Both `validate-only` and `staged-release` require a completed successful **main push** run of CI workflow ID `403832745` at `.github/workflows/ci.yml`, for the exact commit in `Steady-Hand-AI/mcp-flightrecorder`. Its required jobs are:
 
@@ -35,8 +35,8 @@ The candidate artifact contains exactly these files in one flat directory:
 
 | File | Purpose |
 |---|---|
-| `mcp_flightrecorder-0.5.22-py3-none-any.whl` | Original installable wheel |
-| `mcp_flightrecorder-0.5.22.tar.gz` | Original source distribution |
+| `mcp_flightrecorder-0.5.23-py3-none-any.whl` | Original installable wheel |
+| `mcp_flightrecorder-0.5.23.tar.gz` | Original source distribution |
 | `manifest.json` | Repository, commit/tree, workflow, version/tag, CI run/attempt and package filenames, sizes and SHA256 values |
 | `SHA256SUMS` | Checksums for the two distributions |
 
@@ -74,7 +74,7 @@ Before either dispatch, integrate the approved commit through the normal reposit
 release_commit='<FULL_40_CHARACTER_REVIEWED_COMMIT>'
 gh workflow run publish.yml --repo Steady-Hand-AI/mcp-flightrecorder --ref main \
     -f mode=validate-only -f expected_commit="$release_commit" \
-    -f release_version=0.5.22 -f planned_tag=0.5.22
+    -f release_version=0.5.23 -f planned_tag=0.5.23
 ```
 
 If validate-only was run, inspect its four-file candidate and results in [Actions](https://github.com/Steady-Hand-AI/mcp-flightrecorder/actions). With the reviewed main identity and required CI still valid, registry/environment setup complete, and the annotated tag correct, an authorized maintainer can request staged publication. This run builds its own candidate for approval:
@@ -83,7 +83,7 @@ If validate-only was run, inspect its four-file candidate and results in [Action
 release_commit='<FULL_40_CHARACTER_REVIEWED_COMMIT>'
 gh workflow run publish.yml --repo Steady-Hand-AI/mcp-flightrecorder --ref main \
     -f mode=staged-release -f expected_commit="$release_commit" \
-    -f release_version=0.5.22 -f planned_tag=0.5.22
+    -f release_version=0.5.23 -f planned_tag=0.5.23
 ```
 
 Inspect and approve the candidate produced by this staged run at the `testpypi` gate. The ordered stages are:

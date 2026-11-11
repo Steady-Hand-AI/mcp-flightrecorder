@@ -22,9 +22,9 @@ print(sys.version, sqlite3.sqlite_version, sys.executable)
 PYTHON
 mfr_work=$(mktemp -d /tmp/mfr-inspection-XXXXXX)
 "$mfr_python" -m venv "$mfr_work/env"
-"$mfr_work/env/bin/python" -m pip install 'mcp-flightrecorder[openai-chat,mcp]==0.5.22' \
+"$mfr_work/env/bin/python" -m pip install 'mcp-flightrecorder[openai-chat,mcp]==0.5.23' \
     'httpx2>=2.15.1' 'mcp-types>=2.3.0'
-git clone --depth 1 --branch 0.5.22 https://github.com/Steady-Hand-AI/mcp-flightrecorder.git "$mfr_work/source"
+git clone --depth 1 --branch 0.5.23 https://github.com/Steady-Hand-AI/mcp-flightrecorder.git "$mfr_work/source"
 mfr_source="$mfr_work/source"
 cd "$mfr_work"
 "$mfr_work/env/bin/python" -m pip check
@@ -43,7 +43,7 @@ PYTHON
 "$mfr_work/env/bin/python" -I -B -m json.tool inspection.json
 ```
 
-Alternatively, extract `mcp_flightrecorder-0.5.22.tar.gz` from the [PyPI release files](https://pypi.org/project/mcp-flightrecorder/0.5.22/#files) and set `mfr_source` to its absolute extracted path instead of cloning. Both examples are source-shipped files, not wheel entry points. For a local candidate, install its exact matching wheel with the same extras and use its clean source export in place of the two public acquisition steps.
+Alternatively, extract `mcp_flightrecorder-0.5.23.tar.gz` from the [PyPI release files](https://pypi.org/project/mcp-flightrecorder/0.5.23/#files) and set `mfr_source` to its absolute extracted path instead of cloning. Both examples are source-shipped files, not wheel entry points. For a local candidate, install its exact matching wheel with the same extras and use its clean source export in place of the two public acquisition steps.
 
 [`inspect_recording.py`](../examples/inspect_recording.py) launches the **installed `fr mcp` subprocess** using the same environment as the client. It initializes `mcp.Client`, discovers tools and the schema resource, reads the run ID, diagnoses the recording, finds the intentional raw text mismatch, selects the second model call, and follows its request ancestry. The JSON retains the reader envelopes, IDs, unknowns and cutoffs. Its two-call selection is specific to this walkthrough; applications choose their own turn/model-call IDs from the returned pages. With multiple runs, pass the example `--run RUN_ID` explicitly.
 
@@ -86,7 +86,7 @@ The one resource, **`mfr://schema/inspection`**, returns the installed static sc
 
 Every tool accepts `timeout=10.0` (finite `0 < timeout <= 30`) and `max_output_bytes=65536` (1,024–1,048,576). The byte budget covers the compact encoded UTF-8 JSON in the single text content block, excluding MCP framing. Results are not duplicated in structured content. The static schema response is bounded too. These are cooperative per-call bounds, not process isolation or a total-memory guarantee. Each call owns and closes its read connection/transaction; pages are separate snapshots with existing cursors, `has_more`, unknowns and cutoffs. Check them before treating a view as complete.
 
-Invalid arguments, ambiguous run selection, unknown objects, unavailable content and expired reads use normal MCP tool errors. Correct the arguments, explicitly select a discovered run/object, continue a returned cursor, narrow a request or use a larger valid budget; a failed call does not require restarting the session. A missing SDK requires `pip install 'mcp-flightrecorder[mcp]==0.5.22'` in the environment that owns `fr`.
+Invalid arguments, ambiguous run selection, unknown objects, unavailable content and expired reads use normal MCP tool errors. Correct the arguments, explicitly select a discovered run/object, continue a returned cursor, narrow a request or use a larger valid budget; a failed call does not require restarting the session. A missing SDK requires `pip install 'mcp-flightrecorder[mcp]==0.5.23'` in the environment that owns `fr`.
 
 ## Acquire a snapshot separately
 

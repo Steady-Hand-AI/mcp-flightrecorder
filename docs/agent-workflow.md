@@ -54,6 +54,68 @@ A gate text view comes from one completed result and keeps its final verdict, an
 
 A useful report names the absolute file, run, policy, verdict/exit, concrete event IDs, observed mismatch or missing evidence, and any output limits. Separate observed facts from possible corrective actions. In the demo, report that the mutation is intentionally seeded; no application repair is implied.
 
+## Keep a regression check
+
+Version 0.5.23 adds `mcp_flightrecorder.testing.assert_evidence` and a [regression example](../examples/regression/test_host.py) that keeps evidence and application assertions independent.
+
+Run your current host code afresh into an explicit new recording file, close it, then evaluate the evidence.
+
+```python
+from mcp_flightrecorder.testing import EvidenceReadError, assert_evidence
+
+result = assert_evidence("fresh-test-recording.sqlite")
+```
+
+The helper accepts these arguments.
+
+```text
+assert_evidence(path, *, run=None, expect=("model", "host", "mcp"),
+                min_activity=None, allow_local_tools=False)
+```
+
+`run` selects the run in that file. Omission requires exactly one run. The default `min_activity=None` creates a fresh `{"answer_occurrences": 1}` for each call. An explicit empty or invalid policy remains invalid, and caller containers stay unchanged. Set expectations and minima from the application's actual requirements. The caller supplies a completed recording at an explicit file path.
+
+| Outcome | Python behavior |
+|---|---|
+| Completed PASS | Returns the existing gate result, including scope and exclusions. |
+| Completed FAIL or UNKNOWN | Raises `AssertionError` with the same bounded gate explanation. |
+| Read, configuration, timeout or output error (`ok=False`) | Raises `EvidenceReadError`. Its `.reason` preserves the original reader reason. The call could not return a verdict. |
+
+`allow_local_tools` must be exactly `True` or `False`. Other values raise `EvidenceReadError` with reason `invalid_allow_local_tools`. Only explicit `True` selects conservative MCP-only answer comparison. Validated local exclusions leave local forwarding unverified. Missing selected MCP evidence, ambiguous attempts and independent integrity, coverage or health failures remain failures or unknowns. The default retains all-answer scope. Preserve the intended policy, preparation declarations and application expectations when fixing a failure.
+
+Each valid helper invocation calls the existing Python gate once and reuses its bounded text renderer for assertion failures. Unrelated programmer and process-control exceptions propagate. Keep application assertions independent of the evidence assertion so both outcomes remain visible when either fails. Derive expected values from the application requirement.
+
+### Run the source-shipped regression example
+
+The example consists of [host.py](../examples/regression/host.py) and [test_host.py](../examples/regression/test_host.py). The package installs the helper. Keep both example files together in the matching tagged source or source distribution. The example uses deterministic synthetic inputs and the standard library.
+
+From an empty working directory, install the pinned package and obtain the matching source. The test runs outside the source directory.
+
+```sh
+mfr_work=$(mktemp -d /tmp/mfr-regression-XXXXXX)
+python3 -m venv "$mfr_work/env"
+"$mfr_work/env/bin/python" -m pip install mcp-flightrecorder==0.5.23
+curl -fsSL https://github.com/Steady-Hand-AI/mcp-flightrecorder/archive/refs/tags/0.5.23.tar.gz -o "$mfr_work/source.tar.gz"
+tar -xzf "$mfr_work/source.tar.gz" -C "$mfr_work"
+mfr_source=$(cd "$mfr_work/mcp-flightrecorder-0.5.23" && pwd -P)
+cd "$mfr_work"
+"$mfr_work/env/bin/python" -I -B "$mfr_source/examples/regression/test_host.py"
+```
+
+Alternatively, extract `mcp_flightrecorder-0.5.23.tar.gz` from the [PyPI release files](https://pypi.org/project/mcp-flightrecorder/0.5.23/#files) and set `mfr_source` to the absolute path of its `mcp_flightrecorder-0.5.23` directory instead of downloading the tagged archive. Keep the `examples/regression/` directory intact, then use the same final `cd` and test command.
+
+The test script loads its sibling host example, while `-I` keeps the installed package isolated from the checkout. Ordinary `unittest` tests own their temporary recordings and execute the current host function for every capture case. The suite exits 0 when all checks, including detection of intended failures, succeed.
+
+| Case | Evidence assertion | Independent application assertion |
+|---|---|---|
+| Faithful forwarding | PASS | PASS |
+| Undeclared answer mutation | `AssertionError` | Fails |
+| Declared preparation that violates the requirement | PASS | Fails |
+| Unambiguous local + MCP, deliberately allowed local scope | PASS with one excluded occurrence | PASS |
+| Unreadable recording | `EvidenceReadError` | Not run |
+
+Additional controls keep missing selected MCP evidence and shared-decision ambiguity from becoming local exclusions. The host forwards the required answer. If a forwarding edit breaks it, repair the host behavior and keep the independent expected value and evidence policy fixed. A declared transformation may be faithfully recorded and still fail the application requirement. These checks cover the synthetic host behavior shown here.
+
 ## Recognize MCP-only recordings
 
 A [stdio proxy recording](proxy.md) has operations but no invented host turns or model decisions:

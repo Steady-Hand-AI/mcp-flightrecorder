@@ -21,6 +21,7 @@ Documentation = "https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/main/
 
 [project.scripts]
 fr = "mcp_flightrecorder.cli:main"
+mcp-flightrecorder = "mcp_flightrecorder.cli:main"
 
 [project.optional-dependencies]
 openai-chat = ["openai>=3.35.1"]

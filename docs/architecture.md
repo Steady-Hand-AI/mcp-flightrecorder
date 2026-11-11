@@ -1,8 +1,10 @@
 # Architecture
 
-**Package 0.5.21 · SQLite schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`**
+**Source version 0.5.21 · SQLite schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`**
 
 MCP Flight Recorder captures explicit observations at model, host and MCP boundaries. The host owns native work; the recorder owns bounded capture and its recording. The [HTML map](architecture.html) renders the same implemented behavior offline. [Detailed control flows](#detailed-control-flows) include the source-linked core views plus integration, diagnosis and fixed-file MCP/gate entry paths and the stdio recording bridge, with closure and snapshot drawn separately. This map covers the responsibilities and material branches of the runtime modules, the schema and build seam; it is not a line-by-line call graph. Public details are in [Easy integration](easy-integration.md), [Capture](capture.md), [Inspection](inspection.md), [Integrations](integrations.md), [MCP inspection](mcp-inspection.md) and [Recording proxy](proxy.md).
+
+This source includes unreleased first-run conveniences beyond published 0.5.21: the installed synthetic demo, directory inputs, strict proxy startup and explicit gate answer scope. Their flows are shown in [M12](#m12--first-run-path-selection-and-startup); fixture verdicts do not establish application adoption.
 
 ## 1. Responsibilities and data flow
 
@@ -22,7 +24,8 @@ The host-owned `AgentRecorder` conversation facade manages explicit selected-att
 | Evidence gate | [`_inspect_gate.py`](../src/mcp_flightrecorder/_inspect_gate.py) | Explicit coverage/activity expectations, complete-population validation in one read transaction, and bounded witnesses independent of verdict |
 | Optional MCP inspector | [`_mcp_inspect.py`](../src/mcp_flightrecorder/_mcp_inspect.py) | Fixed stable portable path, five no-content tools, opt-in payload tool, one static schema resource and protocol-only stdout |
 | Stdio recording proxy | [`_proxy.py`](../src/mcp_flightrecorder/_proxy.py) | SDK-free POSIX bridge owning one child and pipe buffers; independent bounded observer owns frame copies, direction/ID correlation and core operation tickets; stderr reports capture loss |
-| CLI and copy | [`cli.py`](../src/mcp_flightrecorder/cli.py), [`__main__.py`](../src/mcp_flightrecorder/__main__.py), [`_snapshot.py`](../src/mcp_flightrecorder/_snapshot.py) | Existing JSON commands, opt-in turns/explain text, doctor, explicit latest/run selection and shared public Python/CLI portable snapshot utility |
+| CLI and copy | [`cli.py`](../src/mcp_flightrecorder/cli.py), [`__main__.py`](../src/mcp_flightrecorder/__main__.py), [`_snapshot.py`](../src/mcp_flightrecorder/_snapshot.py) | Shared CLI directory selection, JSON and opt-in readable views, explicit latest/run selection and shared public Python/CLI portable snapshot utility |
+| First-run helpers | [`demo.py`](../src/mcp_flightrecorder/demo.py), [`_recording_path.py`](../src/mcp_flightrecorder/_recording_path.py) | Synthetic recordings through public capture; fresh directory destinations shared by facade and proxy; no new schema or writer |
 | Operational logging | [`_logging.py`](../src/mcp_flightrecorder/_logging.py), component module loggers | Best-effort standard logging with fixed diagnostic fields; handler failures cannot replace capture or inspection outcomes |
 | Storage definition | [`sql/schema.sql`](../sql/schema.sql), [`setup.py`](../setup.py) | One canonical schema copied into the installed package during the build |
 
@@ -193,6 +196,8 @@ Model policy process-control exceptions propagate at request, decision and termi
 
 The existing readers retain the inspection contract; `diagnose` uses the separate `mfr.diagnose/1` contract. `gate` adds explicit complete-run evidence policy. `inspect.snapshot` / `fr snapshot` share a separate copy operation; `python -m mcp_flightrecorder` uses the same CLI dispatcher. See [M06](#m06--bounded-read-only-inspection-and-uncertainty).
 
+The CLI resolves directory inputs once before invoking a reader. `runs`, `check`, `turns`, `explain`, `doctor`, `payload`, `slice`, `sql`, `gate` and snapshot source select the newest direct regular non-symlink `.sqlite` child by `(max(database_mtime_ns, wal_mtime_ns), filename)`; SHM does not affect ordering. The selected absolute path is disclosed on stderr and within text budgets. A failed selected file never causes fallback. Explicit files preserve CI/reproduction identity. Python readers, `fr mcp` and snapshot output retain explicit-file inputs. Browsing does not freeze a live recording.
+
 | Python / CLI | Behavior and important branch |
 |---|---|
 | `schema()` / `fr schema` | Static installed contract. Opens no recording. |
@@ -208,7 +213,7 @@ The existing readers retain the inspection contract; `diagnose` uses the separat
 | `fr mcp` | Optional fixed-file stdio adapter over shared readers; stable portable input required, no automatic acquisition. Content remains explicit opt-in. |
 | `snapshot()` / `fr snapshot` | Independent read-only source → private backup/finalization/verification → exclusive publication → private cleanup. It preserves recorded source state and capture incompleteness; live acquisition can interact with source sidecars. See M07. |
 
-`turns --text` and `explain --text` render the same existing bounded results with machine IDs. `--last` selects the latest matching recorded turn; multi-run selection stays explicit. `doctor` defaults to text and supports `--json`. Its completed read is not a passing evidence gate.
+`turns --text` and `explain --text` render bounded results with machine IDs. For a run without recorded turns but with MCP operations, only plain unfiltered `turns --text` falls back to a bounded operation view. Explicit run and limit remain supported; `--last`, cursors and turn filters never change meaning. JSON turn results remain unchanged. `--last` selects the latest matching recorded turn; multi-run selection stays explicit. `doctor` defaults to text and supports `--json`. Its completed read is not a passing evidence gate. `gate --text` renders the same completed policy result and exit as JSON, with explicit scope, exclusions, IDs and visible output limits.
 
 CLI exit status is 0 for successful ordinary commands and passing/not-applicable checks, 2 for a failed check/gate, 4 for an unknown check/gate, 3 for incompatible/unreadable/open-WAL recording errors, 1 for other errors, and 130 for KeyboardInterrupt.
 
@@ -317,7 +322,7 @@ The terminal `model.response` attempt releases the usage snapshot in `finally`. 
 
 ## 11. Caller-owned integration and diagnosis
 
-`AgentRecorder` construction is inert; explicit start enables a new path, and `path=None` remains disabled. The host starts/closes recording and native clients separately. Coverage names configured boundaries; complete model coverage is an explicit host declaration. Version 0.5.19 added this facade and diagnosis without a schema migration.
+`AgentRecorder` construction is inert; explicit start enables a new path, and `path=None` remains disabled. An existing directory or explicit trailing separator requests a fresh timestamp/PID/random file on each start. Only a missing leaf directory can be created with mode 0700; existing permissions and ancestors stay unchanged. The core writer alone reserves the database. In directory mode, successful `.path` exposes the absolute generation file while configuration retains the directory for restart. Explicit-file paths preserve their supplied value/type; `start(path=...)` replaces the configured destination. The host starts/closes recording and native clients separately. Coverage names configured boundaries; complete model coverage is an explicit host declaration. Version 0.5.19 added this facade and diagnosis without a schema migration.
 
 A conversation owns its bounded ledger across turns. Identity entries retain original messages; explicit stable keys are scoped to that conversation and recorder generation. Conflicts, failed explicit key lookup, restart, overflow and unknown dedicated tool messages cannot become false no-answer declarations. An overloaded role needs the host's predicate. Entry/key/prepared-byte bounds do not limit later growth of caller objects or process RSS. Close releases bindings; there is no global history registry.
 
@@ -337,7 +342,9 @@ Every tool delegates to the existing reader with a per-call owned transaction, d
 
 `inspect.snapshot` and `fr snapshot` use the same independent acquisition path in M07. They can acquire supported live sources, possibly interacting with source SQLite sidecars, then publish a verified portable new destination. The MCP server performs no snapshot implicitly. The gate is likewise not an MCP tool: `inspect.gate` / `fr gate` require explicit model/host coverage, optional MCP coverage, and a positive non-turn activity minimum. One `run_read` transaction selects the run and visits every relevant turn, answer occurrence and tool invocation using shared validators. Required original evidence, complete preparation sources and authoritative attribution cannot be replaced by IDs, retention labels or sampled doctor output.
 
-Gate expectations and observed counts are retained with complete pass/fail/unknown status. Witness samples can shrink without limiting evaluation. A deadline, required-output failure or incomplete evidence cannot pass. A fully recorded tool error is not itself capture failure. Valid preparation does not clear raw mismatch or prove semantic equivalence. This policy checks host-integrated captured evidence, not answer quality or absence of unobserved calls. See [the actual client walkthrough](mcp-inspection.md) and [gate contract](inspection.md#evidence-gate).
+Gate expectations and observed counts are retained with complete pass/fail/unknown status. Default `answers="all"` is unchanged. Explicit `answers="mcp"` excludes only the result-text comparison of independently validated, unambiguous local occurrences. Shared validators still require authoritative same-run endpoints, current/original witnesses and complete relevant dispatch evidence; malformed/missing results, competing MCP evidence and retry ambiguity stay unknown. All other integrity, coverage, health and attribution checks remain. Exclusions count occurrences, including replay, and have bounded samples; raw facts and activity minima are unchanged. No demonstrably MCP-origin answer comparison under explicit MCP scope yields UNKNOWN, unless another failure already establishes FAIL. Excluded local forwarding is not verified.
+
+Witness samples can shrink without limiting evaluation. A deadline, required-output failure or incomplete evidence cannot pass. A fully recorded tool error is not itself capture failure. Valid preparation does not clear raw mismatch or prove semantic equivalence. Text rendering consumes this same completed result; it never builds a verdict from a doctor page. This policy checks host-integrated captured evidence, not answer quality or absence of unobserved calls. See [the actual client walkthrough](mcp-inspection.md), [agent workflow](agent-workflow.md) and [gate contract](inspection.md#evidence-gate).
 
 ## Detailed control flows
 
@@ -347,7 +354,7 @@ These flows describe component ownership and the implemented admission, persiste
 
 **Entrypoints:** [`Recorder`](../src/mcp_flightrecorder/_recorder.py); [`Writer.run`](../src/mcp_flightrecorder/_storage.py); [`run_read`](../src/mcp_flightrecorder/_inspect_common.py); [`snapshot`](../src/mcp_flightrecorder/_snapshot.py); [`openai_chat.wrap_model`](../src/mcp_flightrecorder/integrations/openai_chat.py), [`anyllm_ollama.wrap_model`](../src/mcp_flightrecorder/integrations/anyllm_ollama.py), [`mcp_client.wrap_mcp`](../src/mcp_flightrecorder/integrations/mcp_client.py), [`mcp_session.wrap_session`](../src/mcp_flightrecorder/integrations/mcp_session.py), [`mcp_session_legacy.wrap_session`](../src/mcp_flightrecorder/integrations/mcp_session_legacy.py).
 
-**Invariants:** The host owns native SDK work and client lifecycle. Optional facades observe native calls; direct Recorder calls bypass the facades. For stdio launch substitution, the proxy owns its child and transport buffers while a separate observer owns capture; recorder admission never gates native delivery. The capture-time writer owns its write connection. Inspection and snapshot use separate read-only source connections. Snapshot publishes a new backup destination; source WAL acquisition may create or update source sidecars. Admission is not durability.
+**Invariants:** The host owns native SDK work and client lifecycle. Optional facades observe native calls; direct Recorder calls bypass the facades. For stdio launch substitution, the proxy owns its child and transport buffers while a separate observer owns capture. Explicit strict startup can require recorder readiness before child launch; after launch, recorder admission never gates native delivery. The capture-time writer owns its write connection. Inspection and snapshot use separate read-only source connections. Snapshot publishes a new backup destination; source WAL acquisition may create or update source sidecars. Admission is not durability.
 
 ```mermaid
 flowchart TD
@@ -812,8 +819,8 @@ flowchart LR
     Reader --> Reply["Bounded JSON / tool error;<br/>preserve unknowns and cutoffs"]
     Live["Source may be live / WAL"] --> Snap["inspect.snapshot / fr snapshot;<br/>private stage and exclusive publication"]
     Snap --> Portable["Verified new portable copy;<br/>recorded open state preserved"] --> Fixed
-    Expectations["Explicit coverage + activity minima"] --> Gate["inspect.gate / fr gate;<br/>one read transaction, entire population"]
-    Gate --> Verdict["Pass / fail / unknown;<br/>operational errors never pass"]
+    Expectations["Explicit coverage + activity minima + answer scope"] --> Gate["Shared classification + scope policy;<br/>one read transaction, entire population"]
+    Gate --> Verdict["Pass / fail / unknown + exclusions;<br/>same JSON/text verdict; errors never pass"]
 ```
 
 ### M11 — Stdio forwarding, observation and closure
@@ -821,6 +828,8 @@ flowchart LR
 **Entrypoints:** [`_proxy.main`, `run`, `_bridge`, `_Observer`](../src/mcp_flightrecorder/_proxy.py); existing [`Recorder` operation and close API](../src/mcp_flightrecorder/_recorder.py). The [proxy walkthrough](proxy.md) runs installed commands with genuine peers.
 
 **Invariants:** One selector loop owns both 64 KiB transport buffers and closure decisions; it forwards raw bytes once and in per-direction order. One observer thread owns frame copies, request-ID/direction state, capture scope and operation tickets. Its queue admits at most 32 chunks of 16 KiB without blocking forwarding. Core admission and the writer retain their existing owners. One diagnostic worker emits fixed coalesced stderr labels; child stderr is inherited native output, not a recorder verdict.
+
+Directory destinations use the shared fresh-path helper; the writer reserves the main and checks sidecar collisions. Default startup remains fail-open. With `--require-recording`, the observer must report successful core initialization before the child launches; failure exits without launching it. This is startup-only, not a per-event gate or promise of later completeness. The successful selected absolute path is escaped and announced through bounded nonblocking stderr. See [M12](#m12--first-run-path-selection-and-startup).
 
 The observer bounds frames to 64 KiB, JSON depth to 32, projected nodes to 4,096, ID/key encodings to 256 bytes and in-flight entries to 128. It tracks opaque/rejected client request IDs so their responses cannot complete another request's ticket. Numeric/string IDs remain distinct; legacy reverse traffic has no client-operation ticket. Supported unique `tools/list` and `tools/call` starts use unscoped MCP-only coverage, no host/model IDs and `link_basis="none"`. Successful start receipts alone supply usable terminal tickets. `isError`, JSON-RPC error and normal results keep distinct states.
 
@@ -849,4 +858,24 @@ flowchart TD
     Finish --> Writer["Existing admission / FIFO writer / SQLite"]
     Stop --> Incomplete["Existing incomplete closure and portable result"]
     Observer -.-> Diagnostics["Bounded stderr loss labels; separate core health"]
+```
+
+### M12 — First run, path selection and startup
+
+**Entrypoints:** [`demo.main`](../src/mcp_flightrecorder/demo.py), [`recording_path`](../src/mcp_flightrecorder/_recording_path.py), [`AgentRecorder.start`](../src/mcp_flightrecorder/easy.py), [`cli.main`](../src/mcp_flightrecorder/cli.py), [`_proxy.run`](../src/mcp_flightrecorder/_proxy.py).
+
+**Invariants:** The installed SDK-free demo uses synthetic controlled observations and public `Recorder` calls. Each invocation creates a fresh directory under an existing parent, writes four portably closed fixtures, and prints complete installed/uvx gate commands. Faithful, mutated, incomplete and mixed fixtures teach PASS, FAIL and UNKNOWN; generation exit 0 does not mean every fixture passes. A demonstrated policy exclusion is not verified local forwarding or evidence of a real integration.
+
+Directory destinations select fresh names but never pre-create the database; writer reservation and no-overwrite rules remain authoritative. Strict proxy startup owns the readiness decision before child launch; default failure still permits native work. Reader directory selection is a separate convenience: choose one file, disclose it, then preserve its success or failure. No reader retries another candidate and no browse operation freezes writer state.
+
+```mermaid
+flowchart LR
+    Config["Facade / proxy: file or directory"] --> Fresh["Fresh name if directory;<br/>core writer reserves and initializes"]
+    Fresh --> Ready{"Strict proxy startup?"}
+    Ready -->|ready, or default fail-open| Launch["Start child; bounded observer stays separate"]
+    Ready -->|strict initialization failure| Refuse["Nonzero; no child"]
+    Browse["Reader CLI: directory input"] --> Select["Direct regular .sqlite + WAL mtime;<br/>resolve once and disclose path"]
+    Select --> Read["Existing reader / snapshot source;<br/>failure has no fallback"]
+    Demo["Installed demo: no SDK / provider"] --> Fixtures["Fresh synthetic fixtures;<br/>public capture and portable close"]
+    Fixtures --> Commands["Printed gate commands;<br/>default policy and explicit exclusions"]
 ```

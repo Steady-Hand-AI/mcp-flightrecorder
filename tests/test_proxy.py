@@ -46,10 +46,13 @@ def fixture(tmp_path, response, *options):
     return argv, observed, pid
 
 
-def proxy(argv, recording=None, *, capture="content", fault=None, evidence=None, release=None):
+def proxy(argv, recording=None, *, capture="content", fault=None, evidence=None, release=None,
+          require_recording=False):
     args = ["proxy"]
     if recording is not None:
         args += ["--record", str(recording), "--capture", capture]
+    if require_recording:
+        args += ["--require-recording"]
     args += ["--", *argv]
     if fault:
         prefix = [sys.executable, "-I", "-B", str(PEER), "bootstrap", "--fault", fault,
@@ -264,6 +267,158 @@ def test_existing_destination_is_preserved_while_native_child_runs(tmp_path):
     assert result.returncode == 0 and result.stdout == response and observed.read_bytes() == data
     assert path.read_bytes() == b"preserved existing file"
     assert b"mfr.proxy:" in result.stderr
+
+
+@pytest.mark.parametrize('existing', [False, True])
+def test_directory_recordings_are_fresh_and_announced_after_initialization(tmp_path, existing):
+    directory = tmp_path / 'recordings with\ncontrols'
+    if existing:
+        directory.mkdir(mode=0o750)
+    destination = directory if existing else str(directory) + '/'
+    data, response = wire(request(1)), wire(answer(1))
+    paths = []
+    for index in range(2):
+        child, observed, pid = fixture(tmp_path / str(index), response)
+        result = run(proxy(child, destination), data, tmp_path)
+        assert result.returncode == 0 and result.stdout == response and observed.read_bytes() == data
+        assert gone(pid)
+        lines = result.stderr.decode('ascii').splitlines()
+        announced = [line.removeprefix('mfr.proxy: recording_path: ') for line in lines
+                     if line.startswith('mfr.proxy: recording_path: ')]
+        assert len(announced) == 1
+        path = Path(json.loads(announced[0]))
+        assert path.is_absolute() and path.parent == directory and path.suffix == '.sqlite'
+        assert len(operations(path)) == 1 and operations(path)[0]['status'] == 'ok'
+        assert_portable(path)
+        paths.append(path)
+    assert paths[0] != paths[1] and len(list(directory.iterdir())) == 2
+    assert directory.stat().st_mode & 0o777 == (0o750 if existing else 0o700)
+
+
+@pytest.mark.parametrize('strict', [False, True])
+def test_initialization_failure_is_real_and_strict_mode_launches_no_child(tmp_path, strict):
+    child, observed, pid = fixture(tmp_path, wire(answer(1)))
+    proof = tmp_path / 'initialization.jsonl'
+    result = run(proxy(child, tmp_path / 'failed.sqlite', fault='init-failed',
+                       evidence=proof, require_recording=strict), wire(request(1)), tmp_path)
+    facts = [json.loads(line) for line in proof.read_text().splitlines()]
+    assert any(item['kind'] == 'injected-initialization-error' for item in facts)
+    assert b'recording_unavailable' in result.stderr and b'recording_path:' not in result.stderr
+    if strict:
+        assert result.returncode == 1 and result.stdout == b''
+        assert not pid.exists() and not observed.exists()
+    else:
+        assert result.returncode == 0 and result.stdout == wire(answer(1))
+        assert observed.read_bytes() == wire(request(1)) and gone(pid)
+
+
+@pytest.mark.parametrize('suffix', ['', '-wal', '-shm', '-journal'])
+@pytest.mark.parametrize('strict', [False, True])
+def test_file_and_sidecar_conflicts_are_actionable_and_preserved(tmp_path, suffix, strict):
+    path = tmp_path / 'conflict.sqlite'
+    conflict = Path(str(path) + suffix)
+    conflict.write_bytes(b'preserve this exact file')
+    child, observed, pid = fixture(tmp_path, wire(answer(1)))
+    result = run(proxy(child, path, require_recording=strict), wire(request(1)), tmp_path)
+    assert conflict.read_bytes() == b'preserve this exact file'
+    assert b'file or SQLite sidecar' in result.stderr and b'fresh file or a directory' in result.stderr
+    assert b'recording_path:' not in result.stderr
+    if strict:
+        assert result.returncode == 1 and not pid.exists() and not observed.exists()
+    else:
+        assert result.returncode == 0 and result.stdout == wire(answer(1)) and gone(pid)
+
+
+def test_require_recording_without_destination_is_usage_error(tmp_path):
+    child, observed, pid = fixture(tmp_path, b'never launched')
+    result = run(proxy(child, require_recording=True), b'', tmp_path)
+    assert result.returncode == 2 and result.stdout == b'' and not pid.exists()
+    assert b'--require-recording requires --record' in result.stderr
+
+
+def test_strict_startup_does_not_promise_later_capture_acceptance(tmp_path):
+    child, observed, pid = fixture(tmp_path, wire(answer(1)))
+    proof = tmp_path / 'rejected.jsonl'
+    result = run(proxy(child, tmp_path / 'capture.sqlite', fault='start-rejected',
+                       evidence=proof, require_recording=True), wire(request(1)), tmp_path)
+    assert result.returncode == 0 and result.stdout == wire(answer(1)) and gone(pid)
+    assert observed.read_bytes() == wire(request(1))
+    facts = [json.loads(line) for line in proof.read_text().splitlines()]
+    assert any(item['kind'] == 'start' and item['status'] == 'rejected' for item in facts)
+    assert b'recording_path:' in result.stderr and b'start_rejected' in result.stderr
+
+
+@pytest.mark.parametrize('strict,sent,expected', [(False, None, 0), (True, None, 0),
+                                                (True, signal.SIGINT, 130),
+                                                (True, signal.SIGTERM, 143)])
+def test_startup_readiness_precedes_child_only_when_required(tmp_path, strict, sent, expected):
+    child, observed, pid = fixture(tmp_path, wire(answer(1)))
+    held, release, ready, launched_at = [tmp_path / name for name in
+                                        ('held', 'release', 'initialized', 'launch.json')]
+    bootstrap = tmp_path / 'startup.py'
+    bootstrap.write_text('''import json, pathlib, subprocess, sys, time
+from mcp_flightrecorder import Recorder
+held, release, ready, launched_at = map(pathlib.Path, sys.argv[1:5])
+initialize, popen = Recorder.__init__, subprocess.Popen
+def init(self, *args, **kwargs):
+    held.write_text('waiting')
+    deadline = time.monotonic() + 10
+    while not release.exists():
+        if time.monotonic() > deadline:
+            raise TimeoutError('initialization fixture deadline')
+        time.sleep(0.01)
+    initialize(self, *args, **kwargs)
+    ready.write_text('actual initialization completed')
+def launch(*args, **kwargs):
+    launched_at.write_text(json.dumps({'initialized': ready.exists()}))
+    return popen(*args, **kwargs)
+Recorder.__init__, subprocess.Popen = init, launch
+sys.argv = ['fr', *sys.argv[5:]]
+from mcp_flightrecorder.cli import main
+raise SystemExit(main())
+''')
+    command = [sys.executable, '-I', '-B', str(bootstrap), *map(str, (held, release, ready, launched_at)),
+               *proxy(child, tmp_path / 'capture.sqlite', require_recording=strict)[1:]]
+    with launched(command, tmp_path) as process:
+        wait_for(held.exists, 'Actual recorder initialization did not begin.')
+        if strict:
+            assert not launched_at.exists() and not pid.exists()
+        else:
+            wait_for(pid.exists, 'Default forwarding waited on capture initialization.')
+        if sent is not None:
+            process.send_signal(sent)
+            stdout, stderr = process.communicate(timeout=5)
+            assert process.returncode == expected and stdout == b''
+            assert not launched_at.exists() and not pid.exists() and not ready.exists()
+            return
+        release.write_text('continue')
+        stdout, stderr = process.communicate(wire(request(1)), timeout=12)
+    assert process.returncode == 0 and stdout == wire(answer(1)) and gone(pid)
+    assert json.loads(launched_at.read_text()) == {'initialized': strict}
+    assert ready.exists() and observed.read_bytes() == wire(request(1))
+    assert b'recording_path:' in stderr
+
+
+@pytest.mark.parametrize('strict', [False, True])
+def test_relative_destination_reports_absolute_path_without_recursive_creation(tmp_path, strict):
+    data, response = wire(request(1)), wire(answer(1))
+    child, observed, pid = fixture(tmp_path / 'success', response)
+    result = run(proxy(child, 'new recordings/', require_recording=strict), data, tmp_path)
+    assert result.returncode == 0 and result.stdout == response and gone(pid)
+    assert b'relative_recording_path' in result.stderr
+    announced = next(line.split(': ', 2)[2] for line in result.stderr.decode('ascii').splitlines()
+                     if line.startswith('mfr.proxy: recording_path: '))
+    path = Path(json.loads(announced))
+    assert path.is_absolute() and path.parent == tmp_path / 'new recordings'
+    assert len(operations(path)) == 1
+    child, observed, pid = fixture(tmp_path / 'failure', response)
+    result = run(proxy(child, 'missing/leaf/', require_recording=strict), data, tmp_path)
+    assert not (tmp_path / 'missing').exists() and b'recording_unavailable' in result.stderr
+    assert result.returncode == (1 if strict else 0)
+    if strict:
+        assert not pid.exists() and not observed.exists()
+    else:
+        assert result.stdout == response and observed.read_bytes() == data and gone(pid)
 
 
 def test_rejected_start_response_cannot_attach_to_another_ticket(tmp_path):
@@ -499,11 +654,13 @@ def test_slow_client_reader_and_bidirectional_backpressure_preserve_complete_byt
     assert process.returncode == 0 and output == response and observed.read_bytes() == data and gone(pid)
 
 
-def test_blocked_diagnostic_stderr_cannot_hold_native_exit_or_child_reaping(tmp_path):
+@pytest.mark.parametrize('strict', [False, True])
+def test_blocked_diagnostic_stderr_cannot_hold_native_exit_or_child_reaping(tmp_path, strict):
     data, response = wire(request(1)), wire(answer(1))
     child, observed, pid = fixture(tmp_path, response)
     path = tmp_path / "existing.sqlite"
-    path.write_bytes(b"existing destination must survive")
+    if not strict:
+        path.write_bytes(b"existing destination must survive")
     read_fd, write_fd = os.pipe()
     try:
         # Fill the inherited pipe before launch, without requiring the child to
@@ -517,7 +674,7 @@ def test_blocked_diagnostic_stderr_cannot_hold_native_exit_or_child_reaping(tmp_
                 break
         assert filled > 0
         os.set_blocking(write_fd, True)
-        with launched(proxy(child, path), tmp_path, stderr=write_fd) as process:
+        with launched(proxy(child, path, require_recording=strict), tmp_path, stderr=write_fd) as process:
             process.stdin.write(data); process.stdin.close()
             assert read_bytes(process.stdout, len(response)) == response
             # Existing-path capture initialization emits a diagnostic while the
@@ -525,7 +682,11 @@ def test_blocked_diagnostic_stderr_cannot_hold_native_exit_or_child_reaping(tmp_
             process.wait(timeout=8)
             assert process.returncode == 0
         assert observed.read_bytes() == data and gone(pid)
-        assert path.read_bytes() == b"existing destination must survive"
+        if strict:
+            assert len(operations(path)) == 1 and operations(path)[0]['status'] == 'ok'
+            assert_portable(path)
+        else:
+            assert path.read_bytes() == b"existing destination must survive"
     finally:
         os.close(write_fd)
         os.close(read_fd)

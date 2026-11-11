@@ -1,10 +1,12 @@
 """Small text views of existing bounded inspection results, with IDs intact."""
 import json
 
+from ._inspect_records import is_proxy_coverage
+
 
 def _label(value):
     # Recording labels are untrusted; escape controls, including terminal ESC.
-    return json.dumps(value, ensure_ascii=False)
+    return json.dumps(value, ensure_ascii=True)
 
 
 def render(result, max_output_bytes=65536, *, selected_path=None):
@@ -50,13 +52,18 @@ def render(result, max_output_bytes=65536, *, selected_path=None):
             if data["answer_witnesses_omitted_count"] or data["excluded_omitted_count"] or any(item["witnesses_omitted"] for item in data["items"]):
                 lines.append("CUTOFF: witness detail omitted; full counts and verdict retained.")
         elif result["operation"] == "diagnose":
+            proxy_scope = is_proxy_coverage(data["run"]["coverage"])
+            if proxy_scope:
+                lines.append("MCP-only proxy coverage. Unattributed operations share the absence of recorded model and host selection.")
             lines.append("Recorded observations — not a whole-run verdict or proof of answer correctness.")
             lines.append("Events inspected: " + str(data["evaluated_events"]) + "; event limit: " + str(data["event_limit"]))
             if not data["diagnostics"]:
                 lines.append("No diagnostic items in this bounded view; this does not establish complete capture.")
             for item in data["diagnostics"]:
                 lines.extend([item["code"] + " at " + _label(item["location"]),
-                              "  Observed: " + item["observed"], "  Try: " + item["hint"]])
+                              "  Observed: " + item["observed"]])
+                if not (proxy_scope and item["code"] == "unattributed_operation"):
+                    lines.append("  Try: " + item["hint"])
             for item in data["preparations"]:
                 lines.append("Preparation " + _label(item["prepared_event_id"]) + " -> request " +
                              _label(item["request_event_id"]) + " at " + _label(item["target_pointer"]))
@@ -70,12 +77,23 @@ def render(result, max_output_bytes=65536, *, selected_path=None):
             if data["events_remaining"] or data["diagnostics_omitted"] or data["preparations_omitted"]:
                 lines.append("CUTOFF: more events or diagnostic items exist; select a turn or raise the bounded limit.")
         elif result["operation"] == "find_turns":
+            if data.get("proxy_scope"):
+                lines.append("MCP-only proxy coverage. This view has no recorded host turns.")
+            for operation in data.get("proxy_operations", ()):
+                lines.extend([
+                    "Operation " + _label(operation["operation_id"]) + " " + _label(operation["method"]) +
+                    " name=" + _label(operation["name"]) + " status=" + _label(operation["status"]),
+                    "  Started=" + _label(operation["started_at"] or "unknown") +
+                    " ended=" + _label(operation["ended_at"] or "unknown"),
+                    "  Start event=" + _label(operation["start_event_id"]) +
+                    " end event=" + _label(operation["end_event_id"]),
+                ])
             for index, item in enumerate(data["items"], 1):
                 turn = item["turn"]
                 lines.append("Turn " + str(index) + " (page label) " + _label(turn["turn_id"]) +
                              "  started=" + _label(turn["started_at"]) + "  capture=" + _label(turn["capture_state"]))
                 lines.append("  Counts " + _label(item["counts"]) + "  Flags " + _label(item["flags"]))
-            if not data["items"]:
+            if not data["items"] and not data.get("proxy_operations"):
                 lines.append("No matching recorded turns.")
             if data["has_more"]:
                 lines.append("CUTOFF: more turns exist; continue with --cursor " + _label(data["next_cursor"]))

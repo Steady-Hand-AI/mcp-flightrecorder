@@ -1,6 +1,6 @@
 # Add recording to an existing host
 
-`mcp_flightrecorder.easy.AgentRecorder` keeps capture bookkeeping inside the library. Your host still owns model requests, parsing, tool selection, retries, concurrency, client lifetimes and stream consumption. Use the [0.5.21 installation and complete demo](../README.md#install-and-record) to start from an empty directory.
+`mcp_flightrecorder.easy.AgentRecorder` keeps capture bookkeeping inside the library. Your host still owns model requests, parsing, tool selection, retries, concurrency, client lifetimes and stream consumption. Start with the [synthetic evidence demo](../README.md#install-and-record), or use the [complete SDK-free host example](#complete-sdk-free-host-example) below.
 
 ## The concepts
 
@@ -40,7 +40,7 @@ A context manager (`with AgentRecorder(...) as rec`) also starts/closes recordin
 
 If the writer has stopped but the file is not portable, release any external reader or other finalization blocker, then retry with `rec.finalize(timeout=5.0)` and inspect the returned status. This retries finalization after close; it is not automatic recovery from storage failure. Disabled recording returns `None`.
 
-The parent directory must exist and the recording path must be fresh. Startup/configuration errors can raise before application work. Do not reuse an inherited recorder after a process fork. Create workers before starting their recorders, each with its own fresh path. The creator-process guard rejects inherited use before recorder-owned locks or storage access; it does not make threaded fork safe.
+An explicit file needs an existing parent and a fresh name. An existing directory or a path ending in `/` selects directory mode: `start()` chooses a fresh absolute `.sqlite` path and exposes it as `rec.path` only after initialization succeeds. A missing requested leaf directory may be created when its parent exists; existing directory permissions are unchanged. Construction and disabled mode create nothing. After close, another start with the same configured directory creates another file; `start(path=...)` replaces the configured destination. Explicit-file `rec.path` preserves the supplied value/type; collisions still raise `FileExistsError`. Startup/configuration errors can raise before application work. Do not reuse an inherited recorder after a process fork. Create workers before starting their recorders, each with its own fresh path. The creator-process guard rejects inherited use before recorder-owned locks or storage access; it does not make threaded fork safe.
 
 ## Ordinary JSON model calls and MCP
 
@@ -141,7 +141,7 @@ messages.append(attempt.answer({"role": "tool", "content": str(result)}))
 # For an async local function: result = await attempt.acall(function, **arguments)
 ```
 
-This captures a host result and can associate the answer with the selected model decision. It does not create an MCP response: the legacy raw MCP-result text comparison remains unknown. Native function values and exceptions stay under host control.
+This captures a host result and can associate the answer with the selected model decision. It does not create an MCP response: the raw MCP-result text comparison remains unknown. Explicit `gate --answers mcp` can exclude that comparison only when the local origin is independently validated and unambiguous; it does not verify local forwarding or excuse other missing/invalid evidence. Native function values and exceptions stay under host control.
 
 For work the host initiates without a model decision, use `conversation.host_call(name, arguments)` inside a turn, then `with host_choice.run():` around the actual wrapped MCP invocation (or `run(local=True)` and `attempt.call`). The dispatch is explicitly host-initiated. An answer without a model decision remains unknown rather than acquiring a fictional model choice.
 
@@ -180,3 +180,59 @@ Inspect `rec.diagnostics` for bounded local `reason`, `hint` and `count` entries
 | Incomplete shutdown | Follow the existing [close/finalize contract](capture.md); never infer portability from file existence. |
 
 Use `fr doctor FILE`, `fr turns FILE --last --text` and `fr explain FILE --last --text` to investigate. Every cutoff and unknown remains material. Doctor is descriptive, not a whole-run PASS gate, and it cannot prove which unobserved call was missing. The [inspection contract](inspection.md) documents JSON compatibility, selection, preparation validation and exit codes.
+
+## Complete SDK-free host example
+
+This complete example records manual JSON model observations, an explicitly invoked local tool and replay in a second turn. It uses the released facade API and metadata retention. Start from an empty working directory; set `MFR_PYTHON` if needed to select supported CPython. Each run creates a fresh file.
+
+```sh
+set -eu
+mfr_python=$(command -v "${MFR_PYTHON:-python3}") || exit 1
+"$mfr_python" -I -B - <<'PYTHON'
+import sys, sqlite3
+assert sys.implementation.name == "cpython"
+assert sys.version_info[:2] >= (3, 11)
+assert sys.version_info.releaselevel == "final"
+assert getattr(sys, "_is_gil_enabled", lambda: True)()
+assert not sys.flags.optimize
+print(sys.version, sqlite3.sqlite_version, sys.executable)
+PYTHON
+mfr_env=$(mktemp -d /tmp/mfr-env-XXXXXX)
+"$mfr_python" -m venv "$mfr_env"
+"$mfr_env/bin/python" -m pip install 'mcp-flightrecorder==0.5.21'
+"$mfr_env/bin/fr" --version
+recording_dir=$(mktemp -d)
+cd "$recording_dir"
+"$mfr_env/bin/python" -I -B - "$recording_dir/run.sqlite" <<'PYTHON'
+import sys
+from mcp_flightrecorder.easy import AgentRecorder
+
+messages = [{"role": "user", "content": "Echo alpha"}]
+rec = AgentRecorder(sys.argv[1], capture="metadata", all_model_calls_recorded=True)
+rec.start()
+conversation = rec.conversation("demo")
+try:
+    with conversation.turn("Echo alpha"):
+        with conversation.model_call({"messages": messages}) as call:
+            response = {"name": "echo", "arguments": {"text": "alpha"}}
+            call.done(response)  # This demo supplies a fixed, ordinary JSON response.
+        choice = call.choice(response["name"], response["arguments"])
+        with choice.run(local=True) as attempt:
+            result = attempt.call(lambda text: text, **response["arguments"])
+        messages.append(attempt.answer({"role": "tool", "content": result}, key="answer-1"))
+    with conversation.turn("Continue"):
+        with conversation.model_call({"messages": messages}, message_keys=[None, "answer-1"]) as call:
+            call.done({"content": result})
+finally:
+    conversation.close()
+    closed = rec.close()
+print("Answer:", result)
+print("Close:", closed)
+assert closed.writer_stopped and closed.portable, closed
+PYTHON
+"$mfr_env/bin/fr" doctor "$recording_dir/run.sqlite"
+"$mfr_env/bin/fr" turns "$recording_dir/run.sqlite" --last --text
+"$mfr_env/bin/fr" explain "$recording_dir/run.sqlite" --last --text
+```
+
+The result is `alpha`, with a stopped, portable recording. Local results have a model association but no MCP-result text comparison; `result_unavailable` is expected. Doctor describes gaps rather than declaring the run correct. The default gate remains unverified for that missing comparison. A local-only trace cannot satisfy explicit MCP comparison scope either: no demonstrably MCP-origin answers is UNKNOWN. Use the [synthetic demo](../README.md#install-and-record) for the separate PASS, FAIL, UNKNOWN and mixed-scope cases.

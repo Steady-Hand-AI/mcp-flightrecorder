@@ -1,6 +1,9 @@
 """Installed JSON command line for the shared, read-only inspection functions."""
 import argparse
 import json
+import os
+from pathlib import Path
+import stat
 import sys
 
 from . import __version__
@@ -108,6 +111,7 @@ def _parser():
     mcp.add_argument("database")
     mcp.add_argument("--allow-content", action="store_true", help="Enable explicit retained-payload reads; other tools still omit bodies.")
     commands.add_parser("proxy", help="Forward one stdio child with optional MCP-boundary recording.")
+    commands.add_parser("demo", help="Generate synthetic recordings and commands to inspect them.")
     return parser
 
 
@@ -206,7 +210,7 @@ def _scoped(args, run_id):
         return inspect.check(args.database, run_id, _expect(args.expect), **common)
     if args.command == "turns":
         return inspect.find_turns(args.database, run_id, filters=_filters(args),
-                                  limit=args.limit, cursor=args.cursor, last=args.last, **common)
+                                  limit=args.limit, cursor=args.cursor, last=args.last, _text=args.text, **common)
     if args.command in {"explain", "doctor"} and args.last:
         selected = inspect.find_turns(args.database, run_id, last=True, **common)
         if not selected["ok"]:
@@ -225,6 +229,48 @@ def _scoped(args, run_id):
                          max_depth=args.max_depth, **common)
 
 
+def _select_recording(database):
+    """Choose one direct regular database from a CLI directory argument."""
+    candidate = Path(database)
+    try:
+        if not candidate.is_dir():
+            return None
+    except (OSError, ValueError):
+        # Explicit-file validation and error envelopes stay with the reader.
+        return None
+    directory = validate_path(database)
+    newest = None
+    try:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if not entry.name.endswith(".sqlite"):
+                    continue
+                try:
+                    db = entry.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                if not stat.S_ISREG(db.st_mode):
+                    continue
+                modified = db.st_mtime_ns
+                try:
+                    wal = os.lstat(entry.path + "-wal")
+                except FileNotFoundError:
+                    pass
+                else:
+                    if stat.S_ISREG(wal.st_mode):
+                        modified = max(modified, wal.st_mtime_ns)
+                rank = modified, entry.name
+                if newest is None or rank > newest:
+                    newest = rank
+    except OSError as error:
+        raise InspectionError("recording_unreadable", "directory_unreadable",
+                              "The recording directory could not be read.") from error
+    if newest is None:
+        raise InspectionError("recording_unreadable", "no_recordings",
+                              "The directory has no direct regular .sqlite recordings.")
+    return directory / newest[1]
+
+
 def _dispatch(args):
     if args.command == "schema":
         return inspect.schema()
@@ -233,8 +279,13 @@ def _dispatch(args):
     if args.command == "gate":
         names = ("turns", "model_requests", "model_responses", "decisions", "tool_calls", "answer_occurrences")
         minima = {name: getattr(args, "min_" + name) for name in names if getattr(args, "min_" + name) is not None}
-        return inspect.gate(args.database, args.run, expect=_expect(args.expect), min_activity=minima or None, answers=args.answers,
-                            timeout=args.timeout, max_output_bytes=args.max_output_bytes)
+        budget = args.max_output_bytes
+        if args.text:
+            validate_int(budget, 1024, 1_048_576, "max_output_bytes")
+            # Fit the completed evaluator result separately from the text view.
+            budget = max(budget, 65_536)
+        return inspect.gate(args.database, args.run, expect=_expect(args.expect), min_activity=minima or None,
+                            answers=args.answers, timeout=args.timeout, max_output_bytes=budget)
     common = {"max_output_bytes": args.max_output_bytes, "no_content": args.no_content}
     if args.command == "runs":
         return inspect.runs(args.database, limit=args.limit, cursor=args.cursor, timeout=args.timeout, **common)
@@ -273,8 +324,12 @@ def main():
         # This transport owns stdout even for configuration failures and help.
         from ._proxy import main as proxy_main
         return proxy_main(arguments[1:])
+    if arguments and arguments[0] == "demo":
+        from .demo import main as demo_main
+        return demo_main(arguments[1:])
     operation = _operation(arguments[0] if arguments else None)
     args = None
+    selected_path = None
     try:
         try:
             args = _parser().parse_args(arguments)
@@ -282,6 +337,11 @@ def main():
                 from ._mcp_inspect import serve
                 serve(args.database, allow_content=args.allow_content)
                 return 0
+            if hasattr(args, "database"):
+                selected_path = _select_recording(args.database)
+                if selected_path is not None:
+                    args.database = str(selected_path)
+                    sys.stderr.write("Selected recording: " + json.dumps(args.database) + "\n")
             result = _dispatch(args)
         except (InspectionError, argparse.ArgumentError) as error:
             if isinstance(error, InspectionError):
@@ -295,7 +355,7 @@ def main():
             result["format"] = DIAGNOSTIC_FORMAT
         as_text = args is not None and (getattr(args, "text", False) or (args.command == "doctor" and not args.json))
         if as_text:
-            sys.stdout.write(render(result, args.max_output_bytes))
+            sys.stdout.write(render(result, args.max_output_bytes, selected_path=selected_path))
         else:
             serialized = encode(result).decode("utf-8")
             sys.stdout.write(serialized + "\n")

@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+from pathlib import Path
 import queue
 import selectors
 import signal
@@ -11,6 +12,7 @@ import threading
 import time
 
 from . import MISSING, Recorder
+from ._recording_path import recording_path
 
 
 CHUNK_BYTES = 16_384
@@ -30,7 +32,7 @@ _COVERAGE = {"producers": {"model": None, "host": None, "mcp": "mfr.proxy"},
 
 
 class _Diagnostics:
-    """Fixed coalesced labels only; a blocked stderr cannot stall the bridge."""
+    """Coalesced labels and bounded copy; blocked stderr cannot stall the bridge."""
     def __init__(self):
         self.pending = queue.Queue(maxsize=32)
         self.seen = set()
@@ -38,13 +40,13 @@ class _Diagnostics:
         self.worker = threading.Thread(target=self._write, daemon=True, name="mfr-proxy-diagnostics")
         self.worker.start()
 
-    def note(self, reason):
+    def note(self, reason, detail=None):
         with self.lock:
             if reason in self.seen:
                 return
             self.seen.add(reason)
         try:
-            self.pending.put_nowait(reason)
+            self.pending.put_nowait(reason if detail is None else reason + ': ' + detail[:4096])
         except queue.Full:
             pass
 
@@ -136,6 +138,8 @@ class _Observer:
         self.pending = queue.Queue(maxsize=QUEUE_ITEMS)
         self.gap = threading.Event()
         self.stopping = threading.Event()
+        self.ready = threading.Event()
+        self.initialized = False
         self.frames = {"client": bytearray(), "server": bytearray()}
         self.calls = {}
         self.disabled = False
@@ -273,11 +277,23 @@ class _Observer:
     def _run(self):
         try:
             try:
+                if not os.path.isabs(self.path):
+                    self.diagnostics.note('relative_recording_path', 'Resolved against the current working directory.')
+                self.path = Path(recording_path(self.path)).absolute()
                 self.recorder = Recorder(self.path, capture=self.capture, coverage=_COVERAGE)
                 self.scope = self.recorder.capture_scope()
-            except Exception:
-                self.diagnostics.note("recording_unavailable")
+                self.initialized = True
+                self.diagnostics.note('recording_path', json.dumps(str(self.path), ensure_ascii=True))
+            except FileExistsError:
+                self.diagnostics.note('recording_unavailable', 'Recording file or SQLite sidecar already exists; '
+                                      'choose a fresh file or a directory.')
                 return
+            except Exception:
+                self.diagnostics.note('recording_unavailable', 'Check destination access and initialization; '
+                                      'choose a fresh file or a directory.')
+                return
+            finally:
+                self.ready.set()
             while not self.stopping.is_set() or not self.pending.empty():
                 if self.gap.is_set() and not self.disabled:
                     self._disable("observer_queue_limit")
@@ -403,22 +419,30 @@ def _bridge(child, observer, diagnostics, interrupted):
                 diagnostics.note("transport_failed")
 
 
-def run(command, *, record=None, capture="metadata"):
-    """Forward one child until closure; never restart it or retry a request."""
+def run(command, *, record=None, capture="metadata", require_recording=False):
+    """Forward one child; optional strictness promises recording startup only."""
+    if require_recording and record is None:
+        raise ValueError('require_recording requires a recording destination')
     diagnostics = _Diagnostics()
     child = observer = None
     interrupted = [0]
     handlers = {}
     failed = False
     try:
-        child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                 stderr=None, bufsize=0, shell=False)
-        if record is not None:
-            observer = _Observer(record, capture, diagnostics)
         def interrupt(number, _frame):
             interrupted[0] = number
         for number in (signal.SIGINT, signal.SIGTERM):
             handlers[number] = signal.signal(number, interrupt)
+        if require_recording:
+            observer = _Observer(record, capture, diagnostics)
+            while not observer.ready.wait(timeout=0.05) and not interrupted[0]:
+                pass
+            if interrupted[0] or not observer.initialized:
+                return 128 + interrupted[0] if interrupted[0] else 1
+        child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=None, bufsize=0, shell=False)
+        if record is not None and observer is None:
+            observer = _Observer(record, capture, diagnostics)
         failed = _bridge(child, observer, diagnostics, interrupted)
     except (OSError, ValueError):
         diagnostics.note("transport_unavailable")
@@ -462,14 +486,18 @@ class _Parser(argparse.ArgumentParser):
 
 def main(arguments):
     parser = _Parser(prog="fr proxy", description="Forward one POSIX stdio child; optionally record selected MCP evidence.")
-    parser.add_argument("--record", metavar="FILE", help="Create a fresh recording; omit for forwarding only.")
+    parser.add_argument("--record", metavar="FILE_OR_DIR", help="Create a fresh file; an existing directory or trailing / chooses a new file. Omit for forwarding only.")
+    parser.add_argument("--require-recording", action="store_true", help="Require actual recording initialization before child startup; later capture loss still reports loss. Requires --record.")
     parser.add_argument("--capture", choices=("metadata", "content"), help="Recording retention; default metadata.")
     parser.add_argument("child", nargs=argparse.REMAINDER, help="-- SERVER_COMMAND ARGUMENT...")
     args = parser.parse_args(arguments)
     if len(args.child) < 2 or args.child[0] != "--" or not args.child[1]:
         parser.error("child command required")
+    if args.require_recording and args.record is None:
+        parser.exit(2, 'fr proxy: --require-recording requires --record FILE_OR_DIR.\n')
     if args.capture is not None and args.record is None or args.record == "":
         parser.error("capture requires a recording")
     if os.name != "posix":
         parser.exit(2, "fr proxy: this stdio bridge requires POSIX pipes.\n")
-    return run(args.child[1:], record=args.record, capture=args.capture or "metadata")
+    return run(args.child[1:], record=args.record, capture=args.capture or "metadata",
+               require_recording=args.require_recording)

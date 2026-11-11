@@ -68,6 +68,11 @@ def run_record(ctx, row, path=""):
     return result
 
 
+def is_proxy_coverage(value):
+    return (isinstance(value, dict) and value.get("model_complete") is False
+            and value.get("producers") == {"model": None, "host": None, "mcp": "mfr.proxy"})
+
+
 def condition_value(ctx, row, path):
     if ctx.no_content:
         return None

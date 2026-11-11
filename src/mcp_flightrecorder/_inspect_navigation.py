@@ -5,12 +5,12 @@ import json
 
 from . import __version__
 from ._inspect_common import (
-    Context, InspectionError, _context_envelope, encode, finish_envelope, invalid, run_read,
+    Context, InspectionError, _context_envelope, encode, finish_envelope, invalid, json_object, run_read,
     validate_id, validate_int,
 )
 from ._inspect_query import QUERY_VALUE_BYTES
 from ._inspect_records import (
-    artifact_record, event_complete, event_record, link_record, operation_record,
+    artifact_record, event_complete, event_record, is_proxy_coverage, link_record, operation_record, project,
     run_record, turn_record,
 )
 from ._inspect_relations import _answer_summary, _member_count, answer_rows, dispatch_rows, member_rows, request_info, witnessed_binding_failures
@@ -163,7 +163,8 @@ def _turn_facts(ctx, run_id, turn_id):
             "counts": counts, "flags": flags}
 
 
-def find_turns(path, run_id, *, filters=None, limit=50, cursor=None, max_output_bytes=65536, no_content=False, timeout=10.0, last=False):
+def find_turns(path, run_id, *, filters=None, limit=50, cursor=None, max_output_bytes=65536,
+               no_content=False, timeout=10.0, last=False, _text=False):
     normalized = {}
     def validate():
         validate_int(limit, 1, 200, "limit")
@@ -201,9 +202,36 @@ def find_turns(path, run_id, *, filters=None, limit=50, cursor=None, max_output_
         for index, (row, facts) in enumerate(selected[:limit]):
             items.append({"turn": turn_record(ctx, row, "/items/" + str(index) + "/turn"), "counts": facts["counts"], "flags": facts["flags"]})
             ordering.append((row["started_at"], row["turn_id"]))
-        return _page(ctx, items, ordering, len(selected) > limit, binding)
+        data, shrink = _page(ctx, items, ordering, len(selected) > limit, binding)
+        if _text and not items:
+            run = ctx.connection.execute("SELECT coverage_json FROM runs WHERE run_id=?", (run_id,)).fetchone()
+            if is_proxy_coverage(json_object(run["coverage_json"])):
+                data["proxy_scope"] = True
+                if not last and cursor is None and not normalized:
+                    return _proxy_operations(ctx, run_id, limit, data)
+        return data, shrink
     return run_read("find_turns", path, {"run_id": run_id}, work, max_output_bytes=max_output_bytes,
                     no_content=no_content, timeout=timeout, validate=validate)
+
+
+def _proxy_operations(ctx, run_id, limit, data):
+    fields = ("operation_id", "method", "name", "status", "started_at", "ended_at",
+              "start_event_id", "end_event_id")
+    raw = rows(ctx, "SELECT " + ",".join(fields) + " FROM operations WHERE run_id=? "
+                    "ORDER BY started_at,operation_id LIMIT ?", (run_id, limit + 1))
+    operations = [project(ctx, row, fields, f"/proxy_operations/{index}")
+                  for index, row in enumerate(raw[:limit])]
+    data["proxy_operations"] = operations
+    if len(raw) > limit:
+        ctx.cutoff("item_limit", "/proxy_operations", count=None)
+
+    def shrink():
+        if operations:
+            operations.pop()
+            return True
+        return False
+
+    return data, shrink
 
 
 def _call_complete(events):
@@ -416,7 +444,7 @@ def schema():
         ("runs", "runs", ["path"], {"limit": 50, "cursor": None, "timeout": 10.0, **common}, "helper"),
         ("schema", "schema", [], {}, "helper"),
         ("snapshot", "snapshot", ["path", "output"], {"timeout": 10.0}, "local_copy"),
-        ("gate", "gate", ["path"], {"run_id": None, "expect": None, "min_activity": None,
+        ("gate", "gate", ["path"], {"run_id": None, "expect": None, "min_activity": None, "answers": "all",
                                      "timeout": 10.0, "max_output_bytes": 65536}, "evidence_gate"),
     ]
     operations = {name: {"python": name, "cli": cli, "required": required,

@@ -86,7 +86,7 @@ class PackageGuardTests(unittest.TestCase):
     def test_real_clean_source_wheel_and_sdist(self):
         result = guard.check(self.source, self.wheel, self.sdist)
         self.assertEqual(result["status"], "PASS")
-        self.assertEqual(len(result["wheel"]["members"]), 45)
+        self.assertEqual(len(result["wheel"]["members"]), 47)
         self.assertGreater(len(result["sdist"]["members"]), 140)
 
     def test_unlisted_source_files_are_rejected(self):

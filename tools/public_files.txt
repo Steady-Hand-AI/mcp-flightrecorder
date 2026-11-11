@@ -62,6 +62,8 @@ examples/mcp_agent_session.py
 examples/proxy_server.py
 examples/pydantic_openai.py
 examples/quickstart.py
+examples/regression/host.py
+examples/regression/test_host.py
 examples/tool_roundtrip.py
 pyproject.toml
 requirements/fast-agent.txt
@@ -118,6 +120,7 @@ src/mcp_flightrecorder/integrations/mcp_client.py
 src/mcp_flightrecorder/integrations/mcp_session.py
 src/mcp_flightrecorder/integrations/mcp_session_legacy.py
 src/mcp_flightrecorder/integrations/openai_chat.py
+src/mcp_flightrecorder/testing.py
 tests/__init__.py
 tests/conftest.py
 tests/fixture_checks.py
@@ -171,6 +174,7 @@ tests/test_proxy_sdk.py
 tests/test_scale_regressions.py
 tests/test_scope_validation.py
 tests/test_shutdown.py
+tests/test_testing.py
 tests/test_tool_roundtrip.py
 tools/check_package.py
 tools/ci.sh

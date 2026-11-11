@@ -73,7 +73,7 @@ if [[ "$profile" == core ]]; then
         tests/test_inspection_logging.py tests/test_inspection_query.py
         tests/test_inspection_snapshot.py tests/test_inspection_snapshot_api.py
         tests/test_inspection_gate.py tests/test_logging.py tests/test_proxy.py
-        tests/test_scope_validation.py tests/test_shutdown.py tests/test_scale_regressions.py
+        tests/test_scope_validation.py tests/test_shutdown.py tests/test_scale_regressions.py tests/test_testing.py
     )
 else
     tests=(

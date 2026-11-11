@@ -110,6 +110,22 @@ fr gate run.sqlite --expect model,host,mcp --min-turns 1 \
 
 Exit 0 means the stated evidence requirements passed; failed requirements exit 2 and unverified evidence exits 4. The gate preserves raw text mismatches while recognizing fully validated preparation. It cannot certify answer quality or prove that no unobserved calls occurred. The [SDK-free local host example](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/0.5.22/docs/easy-integration.md#complete-sdk-free-host-example) uses metadata capture and has no MCP-result comparison, so it is not a passing gate example. It is distinct from the synthetic demo above and the MCP-backed attachment fragment. See the [gate policy and limits](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/0.5.22/docs/inspection.md#evidence-gate).
 
+## Keep a regression check
+
+This development source adds `mcp_flightrecorder.testing.assert_evidence` and a source-shipped regression example. They are **not included in the 0.5.22 package or tag**. Use a wheel built from this source with its matching example files.
+
+Add the evidence assertion after your test runs the current host code into a fresh recording and closes it.
+
+```python
+from mcp_flightrecorder.testing import assert_evidence
+
+result = assert_evidence("fresh-test-recording.sqlite")
+```
+
+PASS returns the gate result. Completed FAIL or UNKNOWN raises `AssertionError`. A read or configuration error raises `EvidenceReadError` with its original `reason`. Keep an independent application assertion: faithful capture can still record the wrong answer. Explicit `allow_local_tools=True` excludes validated local comparisons. Their forwarding remains unverified, and missing MCP evidence still prevents a pass.
+
+The [regression walkthrough](docs/agent-workflow.md#keep-a-regression-check) runs the current host function with deterministic synthetic inputs, checks evidence and behavior independently, and catches intentional negative cases in an ordinary test suite. It includes the exact command for running the source example outside the checkout against an installed wheel.
+
 ## Use the capture API
 
 Check capture receipts and `recorder.health()` when recording completeness matters. `close_result.portable` reports whether the stopped recording was finalized and verified as a standalone file. A portable recording can still contain incomplete capture. Use `capture="metadata"` when bodies should be omitted; metadata, structural membership and retention facts remain available.

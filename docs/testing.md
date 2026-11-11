@@ -55,7 +55,7 @@ cd "$work_dir/source"
 
 ```
 
-Run the following **25-module SDK-free suite** after the build and installation above. It includes the facade, process/lifecycle ownership and diagnostic-reader, complete-run gate and public snapshot API tests. Six other inspection modules use the real OpenAI/MCP-backed integration recording fixture and run with the native adapter, facade and roundtrip tests in the **separate integration environment** in §2. These full selections match `tools/ci.sh`; do not skip modules or substitute mocked SDKs.
+Run the following **26-module SDK-free suite** after the build and installation above. It includes the facade, process/lifecycle ownership, diagnostic reader, complete-run gate, evidence assertion and public snapshot API tests. Six other inspection modules use the real OpenAI/MCP-backed integration recording fixture and run with the native adapter, facade and roundtrip tests in the **separate integration environment** in §2. These full selections match `tools/ci.sh`; do not skip modules or substitute mocked SDKs.
 
 ```sh
 env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOLOAD -u PYTEST_ADDOPTS PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir" \
@@ -68,7 +68,7 @@ env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOL
     tests/test_inspection_logging.py tests/test_inspection_query.py \
     tests/test_inspection_snapshot.py tests/test_inspection_snapshot_api.py \
     tests/test_inspection_gate.py tests/test_logging.py tests/test_proxy.py \
-    tests/test_scope_validation.py tests/test_shutdown.py tests/test_scale_regressions.py
+    tests/test_scope_validation.py tests/test_shutdown.py tests/test_scale_regressions.py tests/test_testing.py
 ```
 
 Check that `mcp_flightrecorder.__file__` points to the installed venv, never `src/`. The SDK-specific adapter/fixture modules are `test_integration_fixture.py`, `test_integration_history.py`, `test_mcp_client.py` and `test_openai_chat.py`; the integration selection also includes `test_easy_sdk.py`, `test_tool_roundtrip.py` the genuine stdio client/server `test_mcp_inspection.py`, and `test_proxy_sdk.py`. Collection alone does not qualify them.
@@ -227,7 +227,7 @@ mkdir -p "$work_dir/results/tmp"
 "$work_dir/current-env/bin/python" -I -B -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); s.close()'
 ```
 
-The following focused selection runs 21 core modules and seven SDK modules from the exported source directory, sequentially with four workers. It covers retention and shared lifecycle behavior; it does not replace the full 25-module core suite in §1 or the 14-module main integration suite in §2. Both commands use normal assertions and the installed pytest/xdist/pytest-check plugins' ordinary autoload. Unset `PYTEST_DISABLE_PLUGIN_AUTOLOAD`; do not also load pytest-check under a second plugin name. Clear `PYTEST_ADDOPTS` so inherited selection, plugin or worker options cannot alter the selection.
+The following focused selection runs 21 core modules and seven SDK modules from the exported source directory, sequentially with four workers. It covers retention and shared lifecycle behavior; it does not replace the full 26-module core suite in §1 or the 14-module main integration suite in §2. Both commands use normal assertions and the installed pytest/xdist/pytest-check plugins' ordinary autoload. Unset `PYTEST_DISABLE_PLUGIN_AUTOLOAD`; do not also load pytest-check under a second plugin name. Clear `PYTEST_ADDOPTS` so inherited selection, plugin or worker options cannot alter the selection.
 
 ```sh
 env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE -u PYTEST_DISABLE_PLUGIN_AUTOLOAD -u PYTEST_ADDOPTS PYTHONDONTWRITEBYTECODE=1 TMPDIR="$work_dir/results/tmp" \

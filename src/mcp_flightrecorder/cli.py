@@ -13,6 +13,8 @@ from ._inspect_text import render
 
 class Parser(argparse.ArgumentParser):
     def error(self, message):
+        if self.prog == "fr gate":
+            raise InspectionError("invalid_request", "invalid_cli", "Use fr gate FILE --expect model,host,mcp --min-answer-occurrences 1. A positive non-turn minimum is required; see fr gate --help.")
         raise InspectionError("invalid_request", "invalid_cli", "The command or its arguments are invalid; use fr --help for the supported syntax.")
 
 
@@ -95,6 +97,8 @@ def _parser():
     gate = commands.add_parser("gate", help="Verify complete host evidence against explicit coverage and activity expectations.")
     gate.add_argument("database")
     gate.add_argument("--run")
+    gate.add_argument("--answers", choices=("all", "mcp"), default="all", help="Compare all answers by default; mcp excludes only validated local comparisons.")
+    gate.add_argument("--text", action="store_true", help="Render the completed verdict, scope and bounded evidence witnesses.")
     gate.add_argument("--expect", required=True, help="Comma-separated boundaries, including model and host.")
     for name in ("turns", "model-requests", "model-responses", "decisions", "tool-calls", "answer-occurrences"):
         gate.add_argument("--min-" + name, type=int)
@@ -229,7 +233,7 @@ def _dispatch(args):
     if args.command == "gate":
         names = ("turns", "model_requests", "model_responses", "decisions", "tool_calls", "answer_occurrences")
         minima = {name: getattr(args, "min_" + name) for name in names if getattr(args, "min_" + name) is not None}
-        return inspect.gate(args.database, args.run, expect=_expect(args.expect), min_activity=minima or None,
+        return inspect.gate(args.database, args.run, expect=_expect(args.expect), min_activity=minima or None, answers=args.answers,
                             timeout=args.timeout, max_output_bytes=args.max_output_bytes)
     common = {"max_output_bytes": args.max_output_bytes, "no_content": args.no_content}
     if args.command == "runs":

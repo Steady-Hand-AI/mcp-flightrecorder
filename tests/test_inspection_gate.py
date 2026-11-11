@@ -117,7 +117,7 @@ def test_gate_accepts_original_evidence_preserving_raw_facts(tmp_path, capture, 
     assert result["ok"] and result["data"]["status"] == "pass", result
     assert result["data"]["evaluation_complete"] is True
     assert result["scope"]["run_id"] == run
-    assert result["data"]["expectations"] == {"boundaries": sorted(EXPECT), "min_activity": MINIMUM}
+    assert result["data"]["expectations"] == {"boundaries": sorted(EXPECT), "min_activity": MINIMUM, "answers": "all"}
     assert result["data"]["actual_activity"] == MINIMUM
     assert result["data"]["stats"]["text_mismatch"] == int(prepared)
     assert inspect.explain(path, run, turns[0]["turn"]) == raw
@@ -282,6 +282,9 @@ def test_mcp_boundary_is_optional_but_host_model_expectations_are_explicit(tmp_p
     result = inspect.gate(path, expect=["model", "host"], min_activity={"model_requests": 1, "model_responses": 1})
     assert result["ok"] and result["data"]["status"] == "pass", result
     assert item(result, "coverage.mcp")["status"] == "not_applicable"
+    scoped = inspect.gate(path, expect=["model", "host"], min_activity={"model_requests": 1}, answers="mcp")
+    assert scoped["data"]["status"] == "unknown"
+    assert item(scoped, "mcp_answer_scope")["witnesses"][0]["reason"] == "no_mcp_answers_in_scope"
 
 
 def test_one_owned_snapshot_and_connection_cleanup(tmp_path, monkeypatch):
@@ -313,7 +316,8 @@ def test_one_owned_snapshot_and_connection_cleanup(tmp_path, monkeypatch):
     assert gate(path, run)["data"]["status"] == "fail"
 
 
-def test_timeout_and_required_output_failure_never_return_partial_pass(tmp_path, monkeypatch):
+@pytest.mark.parametrize("answers", ["all", "mcp"])
+def test_timeout_and_required_output_failure_never_return_partial_pass(tmp_path, monkeypatch, answers):
     from mcp_flightrecorder import _inspect_gate
 
     path, run, _ = record(tmp_path)
@@ -326,10 +330,10 @@ def test_timeout_and_required_output_failure_never_return_partial_pass(tmp_path,
 
     with monkeypatch.context() as patch:
         patch.setattr(_inspect_gate, "_check", expire)
-        timed_out = gate(path, run)
+        timed_out = gate(path, run, answers=answers)
     assert not timed_out["ok"] and timed_out["error"]["code"] == "query_timeout"
     assert timed_out["data"] is None
-    small = gate(path, run, max_output_bytes=1024)
+    small = gate(path, run, answers=answers, max_output_bytes=1024)
     assert not small["ok"] and small["error"]["code"] == "limit_exceeded"
     assert small["data"] is None
 
@@ -455,3 +459,239 @@ def test_known_event_contract_requires_its_declared_boundary(tmp_path, kind):
     result = inspect.gate(path, expect=EXPECT, min_activity={"model_requests": 1})
     assert result["ok"] and result["data"]["status"] == "fail", result
     assert item(result, "authoritative_observations")["failed"] > 0
+
+
+def local_answers(tmp_path, *, count=1, capture="metadata", competing=None,
+                  replay=False, later_attempt=False, include_mcp=True, bad_mcp=False, selected_mcp=False):
+    """Real explicit local dispatches; no guessed attempt or result identity."""
+    path = tmp_path / "local.sqlite"
+    rec = Recorder(path, capture=capture, coverage=COVERAGE, comparisons=True,
+                   limits={"ordinary_items": 10000, "ordinary_bytes": 64 * 1024 * 1024,
+                           "completion_items": 1000, "completion_bytes": 8 * 1024 * 1024,
+                           "committed_cache_items": 10000})
+    run = rec.capture_scope().run_id
+    locals_ = []
+    try:
+        for _ in range(count):
+            with rec.turn("Local selection"):
+                first = observe(rec, "model.request", {"messages": []}, messages=[])
+                choice = observe(rec, "model.tool_call", {}, name="local", model_call_id=first.model_call_id)
+                observe(rec, "model.response", {}, model_call_id=first.model_call_id)
+                dispatches = []
+                for index in range(2 if competing in {"local", "execute"} else 1):
+                    with rec.dispatch(action="execute" if index and competing == "execute" else "local",
+                                      name="local", arguments={}, decision_event_ids=[choice.event_id]):
+                        dispatches.append(rec.capture_scope().dispatch_event_id)
+                        observe(rec, "host.tool_result", "local text", sources=[])
+                if competing == "propagated":
+                    start = rec.start_operation(scope=rec.capture_scope(), client_id="test", method="tools/call",
+                        name="local", arguments={}, link_basis="propagated", decision_id=choice.decision_id)
+                    assert start.status == "accepted"
+                    selected = rec.finish_operation(start.ticket, result="local text", status="ok", text_paths=[""])
+                    assert selected.status == "accepted"
+                message = {"role": "tool", "content": "local text"}
+                binding = {"bindings": [{"decision_event_id": choice.event_id, "result_event_id": selected.event_id if selected_mcp else None,
+                                         "pointer": "/content", "text_paths": [""]}]}
+                request = observe(rec, "model.request", {"messages": [message]}, messages=[binding])
+                observe(rec, "model.response", {}, model_call_id=request.model_call_id)
+                if later_attempt:
+                    with rec.dispatch(action="local", name="local", arguments={}, decision_event_ids=[choice.event_id]):
+                        observe(rec, "host.tool_result", "later text", sources=[])
+                replay_request = request
+                if replay:
+                    replay_request = observe(rec, "model.request", {"messages": [{"role": "user", "content": "Context"}, message]},
+                                             messages=[{"bindings": []}, binding])
+                    observe(rec, "model.response", {}, model_call_id=replay_request.model_call_id)
+                locals_.append({"decision": choice.event_id, "first": first.event_id,
+                                "dispatch": dispatches[0], "request": request.event_id,
+                                "replay": replay_request.event_id, "turn": request.turn_id})
+        if include_mcp:
+            with rec.turn("Independent MCP selection"):
+                first = observe(rec, "model.request", {"messages": []}, messages=[])
+                choice = observe(rec, "model.tool_call", {}, name="remote", model_call_id=first.model_call_id)
+                observe(rec, "model.response", {}, model_call_id=first.model_call_id)
+                start = rec.start_operation(scope=rec.capture_scope(), client_id="test", method="tools/call", name="remote",
+                    arguments={}, link_basis="propagated", decision_id=choice.decision_id)
+                assert start.status == "accepted"
+                end = rec.finish_operation(start.ticket, result="42", status="ok", text_paths=[""])
+                assert end.status == "accepted"
+                message = {"role": "tool", "content": "changed" if bad_mcp else "42"}
+                request = observe(rec, "model.request", {"messages": [message]}, messages=[{"bindings": [
+                    {"decision_event_id": choice.event_id, "result_event_id": end.event_id,
+                     "pointer": "/content", "text_paths": [""]}]}])
+                observe(rec, "model.response", {}, model_call_id=request.model_call_id)
+    finally:
+        closed = rec.close()
+        assert closed.portable and closed.writer_stopped
+    return path, run, locals_
+
+
+def test_local_origin_explanation_preserves_unknown_raw_comparison(tmp_path):
+    path, run, rows = local_answers(tmp_path)
+    result = inspect.explain(path, run, rows[0]["turn"], model_call_id=None)
+    # Select the actual second call from the public turn response.
+    result = inspect.explain(path, run, rows[0]["turn"], model_call_id=result["data"]["calls"][-1]["model_call_id"])
+    answer = result["data"]["detail"]["input_answers"][0]
+    assert answer.get("origin") == "local", answer
+    assert answer["text_equal"] is None and answer["comparison_reason"] == "result_unavailable"
+
+
+def test_gate_text_keeps_verdict_when_details_exhaust_budget(tmp_path):
+    from mcp_flightrecorder._inspect_text import render
+    path, run, _ = record(tmp_path, count=11, bad_after=0)
+    result = gate(path, run)
+    text = render(result, 512)
+    assert "VERDICT: FAIL" in text
+    assert "Answer comparison scope: all" in text
+    assert "Excluded local answer occurrences (including replay): 0" in text
+    assert "CUTOFF:" in text
+    assert len(text.encode()) <= 512
+
+
+@pytest.mark.parametrize("capture", ["metadata", "content"])
+@pytest.mark.parametrize("replay", [False, True])
+def test_explicit_mcp_scope_excludes_only_validated_local_occurrences(tmp_path, capture, replay):
+    path, run, rows = local_answers(tmp_path, capture=capture, replay=replay)
+    before = inspect.check(path, run, EXPECT)
+    default = inspect.gate(path, run, expect=EXPECT, min_activity={"answer_occurrences": 1})
+    scoped = inspect.gate(path, run, expect=EXPECT, min_activity={"answer_occurrences": 1}, answers="mcp")
+    assert default["data"]["status"] == "unknown"
+    assert scoped["ok"] and scoped["data"]["status"] == "pass", scoped
+    data = scoped["data"]
+    assert data["expectations"]["answers"] == "mcp"
+    assert data["excluded_count"] == 1 + replay
+    assert data["mcp_answer_count"] == 1
+    assert data["stats"] == default["data"]["stats"]
+    assert data["stats"]["text_unknown"] == 1 + replay
+    assert all(row["ids"]["dispatch_event_id"] == rows[0]["dispatch"] for row in data["excluded"])
+    assert inspect.check(path, run, EXPECT) == before
+
+
+@pytest.mark.parametrize("competing", ["local", "execute", "propagated"])
+def test_shared_decision_attempts_cannot_be_excluded(tmp_path, competing):
+    path, run, _ = local_answers(tmp_path, competing=competing)
+    result = inspect.gate(path, run, expect=EXPECT, min_activity={"answer_occurrences": 1}, answers="mcp")
+    assert result["data"]["status"] == "unknown", result
+    assert result["data"]["excluded_count"] == 0
+    assert item(result, "answer_comparisons")["unknown"] == 1
+
+
+def test_replayed_local_binding_uses_original_execution_interval(tmp_path):
+    path, run, _ = local_answers(tmp_path, replay=True, later_attempt=True)
+    result = inspect.gate(path, run, expect=EXPECT, min_activity={"answer_occurrences": 1}, answers="mcp")
+    assert result["data"]["status"] == "pass", result
+    assert result["data"]["excluded_count"] == 2
+
+
+@pytest.mark.parametrize("damage", ["loss", "coverage", "relation", "omitted", "unresolved", "decision", "request", "dispatch", "sources", "result-int", "result-empty", "result-missing", "result-absent"])
+def test_local_exclusion_cannot_hide_independent_or_invalid_evidence(tmp_path, damage):
+    path, run, rows = local_answers(tmp_path)
+    local = rows[0]
+    if damage == "loss":
+        mutate(path, "UPDATE runs SET dropped_events=1")
+    elif damage == "coverage":
+        mutate(path, "UPDATE runs SET coverage_json=json_set(coverage_json,'$.producers.host',NULL)")
+    elif damage == "relation":
+        mutate(path, "UPDATE links SET witness_event_id='absent' WHERE relation='answers' AND target_event_id=?", (local["request"],))
+    elif damage in {"omitted", "unresolved"}:
+        details(path, local["request"], lambda d: d.update(
+            unresolved_answers_omitted_count=1) if damage == "omitted" else d.update(
+            unresolved_answers=[{"pointer": "/messages/0/content", "reason": "capture_unavailable"}]))
+    elif damage == "decision":
+        mutate(path, "UPDATE events SET model_call_id='absent' WHERE event_id=?", (local["decision"],))
+    elif damage == "request":
+        mutate(path, "UPDATE events SET boundary='host' WHERE event_id=?", (local["request"],))
+    elif damage == "dispatch":
+        details(path, local["dispatch"], lambda d: d.update(complete=False))
+    elif damage == "sources":
+        details(path, local["dispatch"], lambda d: d.update(decision_event_ids=[]))
+    elif damage == "result-absent":
+        mutate(path, "UPDATE links SET details_json=json_remove(details_json,'$.result_event_id') WHERE relation='answers' AND target_event_id=?", (local["request"],))
+    else:
+        value = {"result-int": 5, "result-empty": "", "result-missing": "missing-mcp-result"}[damage]
+        mutate(path, "UPDATE links SET details_json=json_set(details_json,'$.result_event_id',?) WHERE relation='answers' AND target_event_id=?", (value, local["request"]))
+    result = inspect.gate(path, run, expect=EXPECT, min_activity={"answer_occurrences": 1}, answers="mcp")
+    assert result["ok"] and result["data"]["status"] != "pass", result
+    if damage not in {"loss", "coverage"}:
+        assert result["data"]["excluded_count"] == 0
+
+
+def test_mcp_scope_missing_selected_result_never_borrows_another_result(tmp_path):
+    path, run, turns = record(tmp_path, count=2)
+    mutate(path, "DELETE FROM events WHERE event_id=?", (turns[0]["result"],))
+    result = gate(path, run, answers="mcp")
+    assert result["data"]["status"] != "pass"
+    assert result["data"]["excluded_count"] == 0
+    assert result["data"]["mcp_answer_count"] == 1
+
+
+def test_no_mcp_answers_is_explicit_scope_unknown_and_failure_still_wins(tmp_path):
+    path, run, _ = local_answers(tmp_path, include_mcp=False)
+    result = inspect.gate(path, run, expect=EXPECT, min_activity={"answer_occurrences": 1}, answers="mcp")
+    assert result["data"]["status"] == "unknown"
+    assert item(result, "mcp_answer_scope")["witnesses"][0]["reason"] == "no_mcp_answers_in_scope"
+    mutate(path, "UPDATE runs SET dropped_events=1")
+    assert inspect.gate(path, run, expect=EXPECT, min_activity={"answer_occurrences": 1}, answers="mcp")["data"]["status"] == "fail"
+
+
+def test_late_failure_after_many_exclusions_and_bounded_samples(tmp_path):
+    path, run, _ = local_answers(tmp_path, count=201, bad_mcp=True)
+    result = inspect.gate(path, run, expect=EXPECT, min_activity={"answer_occurrences": 1}, answers="mcp", max_output_bytes=8192)
+    assert result["ok"] and result["data"]["status"] == "fail", result
+    assert result["data"]["excluded_count"] == 201
+    assert result["data"]["actual_activity"]["answer_occurrences"] == 202
+    assert result["data"]["excluded_omitted_count"] == 201 - len(result["data"]["excluded"])
+    assert len(result["data"]["excluded"]) <= 10
+    assert item(result, "answer_comparisons")["failed"] == 1
+    assert len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) <= 8192
+
+
+@pytest.mark.parametrize("answers", [None, "local", "MCP", [], True])
+def test_invalid_answer_scope_is_a_configuration_error(tmp_path, answers):
+    result = inspect.gate(tmp_path / "absent.sqlite", expect=EXPECT, min_activity={"answer_occurrences": 1}, answers=answers)
+    assert not result["ok"] and result["error"]["reason"] == "invalid_answers"
+
+
+def test_actual_gate_cli_scope_text_and_useful_usage(tmp_path):
+    path, run, _ = local_answers(tmp_path)
+    base = [sys.executable, "-I", "-B", "-m", "mcp_flightrecorder", "gate", str(path)]
+    command = base + ["--run", run, "--expect", "model,host,mcp", "--min-answer-occurrences", "1", "--answers", "mcp"]
+    raw = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True)
+    text = subprocess.run(command + ["--text"], cwd=tmp_path, capture_output=True, text=True)
+    assert raw.returncode == text.returncode == 0, (raw.stdout, raw.stderr, text.stdout, text.stderr)
+    assert json.loads(raw.stdout)["data"]["excluded_count"] == 1
+    assert "VERDICT: PASS" in text.stdout and "Answer comparison scope: mcp" in text.stdout
+    assert "not verified" in text.stdout and "No MCP result to compare (expected" in text.stdout
+    missing = subprocess.run(base, cwd=tmp_path, capture_output=True, text=True)
+    assert missing.returncode == 1
+    error = json.loads(missing.stdout)["error"]
+    assert error["reason"] == "invalid_cli" and "--min-answer-occurrences 1" in error["message"]
+
+
+def test_explicit_selected_mcp_identity_survives_shared_decision_attempts(tmp_path):
+    path, run, _ = local_answers(tmp_path, competing="propagated", selected_mcp=True)
+    result = inspect.gate(path, run, expect=EXPECT, min_activity={"answer_occurrences": 1}, answers="mcp")
+    assert result["data"]["status"] == "pass", result
+    assert result["data"]["excluded_count"] == 0
+    assert result["data"]["mcp_answer_count"] == 2
+
+
+def test_local_occurrence_uncertainty_is_location_specific(tmp_path):
+    path, run, rows = local_answers(tmp_path, replay=True)
+    details(path, rows[0]["replay"], lambda d: d.update(
+        unresolved_answers=[{"pointer": "/messages/0/content", "reason": "capture_unavailable"}]))
+    result = inspect.gate(path, run, expect=EXPECT, min_activity={"answer_occurrences": 1}, answers="mcp")
+    # The unrelated gap remains a whole-recording unknown; both independently
+    # valid local comparisons are still identified at their own locations.
+    assert result["data"]["status"] != "pass"
+    assert result["data"]["excluded_count"] == 2
+
+
+def test_scoped_text_keeps_summary_before_long_selection_path(tmp_path):
+    from mcp_flightrecorder._inspect_text import render
+    path, run, _ = local_answers(tmp_path)
+    result = inspect.gate(path, run, expect=EXPECT, min_activity={"answer_occurrences": 1}, answers="mcp")
+    text = render(result, 512, selected_path="/" + "x" * 2000)
+    assert "VERDICT: PASS" in text and "scope: mcp" in text
+    assert "(including replay): 1" in text and "not verified" in text
+    assert "CUTOFF:" in text and len(text.encode()) <= 512

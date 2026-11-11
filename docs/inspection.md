@@ -1,10 +1,10 @@
 # Inspection API and CLI
 
-**Package 0.5.22 · schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`.** Standard-library readers serve Python and the CLI. They expose retained observations, explicit attribution and uncertainty. They do not score agents, write findings, repair recordings or infer provenance.
+**Package 0.5.23 · schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`.** Standard-library readers serve Python and the CLI. They expose retained observations, explicit attribution and uncertainty. They do not score agents, write findings, repair recordings or infer provenance.
 
 ## Start with a readable investigation
 
-For a complete file/run selection and evidence-policy workflow, see [investigating a recording](agent-workflow.md). Version 0.5.22 adds directory selection and explicit answer-scope/readable-gate conveniences.
+For a complete file/run selection and evidence-policy workflow, see [investigating a recording](agent-workflow.md). Version 0.5.22 added directory selection and explicit answer-scope/readable-gate conveniences.
 
 ```sh
 fr doctor recording.sqlite

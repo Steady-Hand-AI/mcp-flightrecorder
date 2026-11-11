@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.5.23
+
+- Add `testing.assert_evidence` for ordinary tests, using the existing gate once. Return passing evidence, raise `AssertionError` for completed FAIL or UNKNOWN, and preserve reader reasons in `EvidenceReadError` for unavailable results.
+- Keep all-answer comparison as the default. Explicit local-tool allowance excludes only validated local comparisons while preserving missing or ambiguous MCP evidence and independent failures.
+- Add a source-shipped regression example that runs the current host afresh and checks evidence and application behavior independently. Document a pinned package and matching source recipe with standard-library tests.
+
 ## 0.5.22
 
 - Add the SDK-free installed demo with four synthetic recordings, complete investigation commands and the `mcp-flightrecorder` CLI alias alongside `fr`.

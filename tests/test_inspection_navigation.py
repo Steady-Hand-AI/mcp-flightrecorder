@@ -107,7 +107,7 @@ def model_pair(recorder, *, decision=False):
 
 def test_schema_exact_discovery_contract():
     data = success(inspect.schema(), "schema")
-    check.equal(data["package_version"], "0.5.22", msg="Schema names this release version")
+    check.equal(data["package_version"], "0.5.23", msg="Schema names this release version")
     check.equal(data["database_schema_version"], 6, msg="Inspection preserves the accepted database schema")
     check.equal(data["api_format"], "mfr.inspect/1", msg="Discovery advertises the common public envelope format")
     expected = {"check": "check", "find_turns": "turns", "explain": "explain", "payload": "payload", "slice": "slice", "query": "sql", "runs": "runs", "schema": "schema", "snapshot": "snapshot", "gate": "gate"}

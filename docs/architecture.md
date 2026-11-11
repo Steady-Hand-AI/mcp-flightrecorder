@@ -1,12 +1,12 @@
 # Architecture
 
-**Source version 0.5.22 · SQLite schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`**
+**Source version 0.5.23 · SQLite schema 6 · inspection `mfr.inspect/1` · diagnostics `mfr.diagnose/1`**
 
 MCP Flight Recorder captures explicit observations at model, host and MCP boundaries. The host owns native work; the recorder owns bounded capture and its recording. The [HTML map](architecture.html) renders the same implemented behavior offline. [Detailed control flows](#detailed-control-flows) include the source-linked core views plus integration, diagnosis and fixed-file MCP/gate entry paths and the stdio recording bridge, with closure and snapshot drawn separately. This map covers the responsibilities and material branches of the runtime modules, the schema and build seam; it is not a line-by-line call graph. Public details are in [Easy integration](easy-integration.md), [Capture](capture.md), [Inspection](inspection.md), [Integrations](integrations.md), [MCP inspection](mcp-inspection.md) and [Recording proxy](proxy.md).
 
-Version 0.5.22 includes first-run conveniences: the installed synthetic demo, directory inputs, strict proxy startup and explicit gate answer scope. Their flows are shown in [M12](#m12--first-run-path-selection-and-startup); fixture verdicts do not establish application adoption.
+Version 0.5.22 introduced first-run conveniences: the installed synthetic demo, directory inputs, strict proxy startup and explicit gate answer scope. Their flows are shown in [M12](#m12--first-run-path-selection-and-startup); fixture verdicts do not establish application adoption.
 
-This development source also adds the evidence assertion and regression example described in [§13](#13-evidence-assertion-and-independent-behavior). They are not included in the 0.5.22 package/tag.
+Version 0.5.23 adds the evidence assertion and regression example described in [§13](#13-evidence-assertion-and-independent-behavior).
 
 ## 1. Responsibilities and data flow
 
@@ -271,7 +271,7 @@ The read-only GitHub Actions workflow runs the explicit SDK-free selection on Li
 
 ### Staged publication
 
-The manual `publish.yml` workflow admits main-only `validate-only` or explicit `staged-release` dispatch with a full reviewed commit, version 0.5.22 and planned tag 0.5.22. Both modes require completed successful main-push CI for that exact commit before candidate preparation. Staged release additionally requires that bare tag to exist as an annotated tag at the approved commit. A clean source export builds one original wheel/sdist pair, with package guards, strict Twine, installed smoke and an sdist-rebuilt wheel comparison. Both modes store a flat candidate containing the pair, `manifest.json` and `SHA256SUMS`; source/workflow identity, exact main-push CI and artifact hashes remain bound to the run.
+The manual `publish.yml` workflow admits main-only `validate-only` or explicit `staged-release` dispatch with a full reviewed commit, version 0.5.23 and planned tag 0.5.23. Both modes require completed successful main-push CI for that exact commit before candidate preparation. Staged release additionally requires that bare tag to exist as an annotated tag at the approved commit. A clean source export builds one original wheel/sdist pair, with package guards, strict Twine, installed smoke and an sdist-rebuilt wheel comparison. Both modes store a flat candidate containing the pair, `manifest.json` and `SHA256SUMS`; source/workflow identity, exact main-push CI and artifact hashes remain bound to the run.
 
 Validate-only ends after candidate storage. Staged publication promotes the same bytes through the `testpypi`, `pypi` and `github-release` environments. A release reviewer inspects this run's candidate before TestPyPI approval; PyPI follows TestPyPI download/install verification and a second environment approval. GitHub draft/published-state verification follows PyPI download/install verification. Identity is rechecked after waits. Only proven identical existing files permit partial resume; conflicts stop without deleting, replacing or retagging public state. These are configured release paths, not an observed publication claim. [Releasing](releasing.md) contains exact setup and operator steps.
 

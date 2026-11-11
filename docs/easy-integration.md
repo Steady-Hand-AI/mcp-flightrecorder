@@ -68,7 +68,7 @@ For exactly one actual invocation, `choice.answer(message)` is shorthand for tha
 
 ## Native OpenAI Chat
 
-Install `mcp-flightrecorder[openai-chat]==0.5.22` in your environment. Keep selection and argument parsing on the native response, including which completion alternative and which tool occurrence your application chooses.
+Install `mcp-flightrecorder[openai-chat]==0.5.23` in your environment. Keep selection and argument parsing on the native response, including which completion alternative and which tool occurrence your application chooses.
 
 ```python
 import json
@@ -199,7 +199,7 @@ print(sys.version, sqlite3.sqlite_version, sys.executable)
 PYTHON
 mfr_env=$(mktemp -d /tmp/mfr-env-XXXXXX)
 "$mfr_python" -m venv "$mfr_env"
-"$mfr_env/bin/python" -m pip install 'mcp-flightrecorder==0.5.22'
+"$mfr_env/bin/python" -m pip install 'mcp-flightrecorder==0.5.23'
 "$mfr_env/bin/fr" --version
 recording_dir=$(mktemp -d)
 cd "$recording_dir"

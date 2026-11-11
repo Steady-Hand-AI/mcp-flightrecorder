@@ -56,7 +56,7 @@ A useful report names the absolute file, run, policy, verdict/exit, concrete eve
 
 ## Keep a regression check
 
-The assertion helper and [regression example](../examples/regression/test_host.py) are additions in this development source, absent from the 0.5.22 package/tag. Use the same source revision for the built wheel and example files.
+Version 0.5.23 adds `mcp_flightrecorder.testing.assert_evidence` and a [regression example](../examples/regression/test_host.py) that keeps evidence and application assertions independent.
 
 Run your current host code afresh into an explicit new recording file, close it, then evaluate the evidence.
 
@@ -87,17 +87,22 @@ Each valid helper invocation calls the existing Python gate once and reuses its 
 
 ### Run the source-shipped regression example
 
-The example consists of [host.py](../examples/regression/host.py) and [test_host.py](../examples/regression/test_host.py) in this checkout or its matching source distribution. The wheel installs the helper. Get both example files from the checkout or source distribution. The example uses deterministic synthetic inputs and the standard library. Obtain or build a wheel from this development source, then run the following from the source root, replacing `mfr_wheel` with that wheel's absolute path.
+The example consists of [host.py](../examples/regression/host.py) and [test_host.py](../examples/regression/test_host.py). The package installs the helper. Keep both example files together in the matching tagged source or source distribution. The example uses deterministic synthetic inputs and the standard library.
+
+From an empty working directory, install the pinned package and obtain the matching source. The test runs outside the source directory.
 
 ```sh
-mfr_source=$(pwd -P)
-mfr_wheel=/absolute/path/to/mcp_flightrecorder-0.5.22-py3-none-any.whl
 mfr_work=$(mktemp -d /tmp/mfr-regression-XXXXXX)
 python3 -m venv "$mfr_work/env"
-"$mfr_work/env/bin/python" -m pip install "$mfr_wheel"
+"$mfr_work/env/bin/python" -m pip install mcp-flightrecorder==0.5.23
+curl -fsSL https://github.com/Steady-Hand-AI/mcp-flightrecorder/archive/refs/tags/0.5.23.tar.gz -o "$mfr_work/source.tar.gz"
+tar -xzf "$mfr_work/source.tar.gz" -C "$mfr_work"
+mfr_source=$(cd "$mfr_work/mcp-flightrecorder-0.5.23" && pwd -P)
 cd "$mfr_work"
 "$mfr_work/env/bin/python" -I -B "$mfr_source/examples/regression/test_host.py"
 ```
+
+Alternatively, extract `mcp_flightrecorder-0.5.23.tar.gz` from the [PyPI release files](https://pypi.org/project/mcp-flightrecorder/0.5.23/#files) and set `mfr_source` to the absolute path of its `mcp_flightrecorder-0.5.23` directory instead of downloading the tagged archive. Keep the `examples/regression/` directory intact, then use the same final `cd` and test command.
 
 The test script loads its sibling host example, while `-I` keeps the installed package isolated from the checkout. Ordinary `unittest` tests own their temporary recordings and execute the current host function for every capture case. The suite exits 0 when all checks, including detection of intended failures, succeed.
 

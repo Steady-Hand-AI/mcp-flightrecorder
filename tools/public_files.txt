@@ -49,6 +49,7 @@ docs/easy-integration.md
 docs/inspection.md
 docs/integrations.md
 docs/mcp-inspection.md
+docs/openai_mcp.md
 docs/proxy.md
 docs/release-notes.md
 docs/releasing.md
@@ -59,6 +60,8 @@ examples/fast_agent.py
 examples/fastmcp_session.py
 examples/inspect_recording.py
 examples/mcp_agent_session.py
+examples/openai_mcp.py
+examples/openai_mcp_peers.py
 examples/proxy_server.py
 examples/pydantic_openai.py
 examples/quickstart.py
@@ -169,6 +172,7 @@ tests/test_logging.py
 tests/test_mcp_client.py
 tests/test_mcp_inspection.py
 tests/test_openai_chat.py
+tests/test_openai_mcp_example.py
 tests/test_proxy.py
 tests/test_proxy_sdk.py
 tests/test_scale_regressions.py

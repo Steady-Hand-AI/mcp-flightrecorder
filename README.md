@@ -82,6 +82,8 @@ An answer binds the invocation your host selected, including unavailable capture
 
 The installed `fr` command and `python -m mcp_flightrecorder` share the same readers. Existing commands retain JSON defaults; `turns --text` and `explain --text` add readable labels and IDs, and `doctor --json` exposes the separate diagnostic envelope. `--last` selects a recorded turn; files with multiple runs require `--run`. See the [inspection contract](https://github.com/Steady-Hand-AI/mcp-flightrecorder/blob/0.5.23/docs/inspection.md) for bounds, preparation explanations and exit codes.
 
+The [complete OpenAI and MCP host example](docs/openai_mcp.md) uses `AgentRecorder` with native SDK clients, deterministic peers and independent evidence/application checks. It is an addition in this development source beyond the 0.5.23 package and tag.
+
 ## Record a stdio MCP server
 
 For a host whose MCP server launch command you can edit, use the installed recording bridge:

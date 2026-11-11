@@ -2,6 +2,8 @@
 
 `mcp_flightrecorder.easy.AgentRecorder` keeps capture bookkeeping inside the library. Your host still owns model requests, parsing, tool selection, retries, concurrency, client lifetimes and stream consumption. Start with the [synthetic evidence demo](../README.md#install-and-record), or use the [complete SDK-free host example](#complete-sdk-free-host-example) below.
 
+Use the [complete OpenAI and MCP recipe](openai_mcp.md) to run the facade with native SDK clients and retain separate evidence and application assertions. This development-source example has its own matching build/install commands.
+
 ## The concepts
 
 | Handle | What the host states |

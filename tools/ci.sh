@@ -78,7 +78,7 @@ if [[ "$profile" == core ]]; then
 else
     tests=(
         tests/test_integration_fixture.py tests/test_integration_history.py
-        tests/test_tool_roundtrip.py
+        tests/test_tool_roundtrip.py tests/test_openai_mcp_example.py
         tests/test_easy_sdk.py tests/test_proxy_sdk.py
         tests/test_mcp_client.py tests/test_mcp_inspection.py tests/test_openai_chat.py
         tests/test_inspection_checks.py tests/test_inspection_commands.py

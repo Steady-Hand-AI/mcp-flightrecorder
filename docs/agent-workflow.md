@@ -116,6 +116,8 @@ The test script loads its sibling host example, while `-I` keeps the installed p
 
 Additional controls keep missing selected MCP evidence and shared-decision ambiguity from becoming local exclusions. The host forwards the required answer. If a forwarding edit breaks it, repair the host behavior and keep the independent expected value and evidence policy fixed. A declared transformation may be faithfully recorded and still fail the application requirement. These checks cover the synthetic host behavior shown here.
 
+For the same evidence/application distinction with genuine SDK clients, follow the [complete OpenAI and MCP recipe](openai_mcp.md). Its development-source host uses the facade with deterministic peers and keeps native message serialization visible.
+
 ## Recognize MCP-only recordings
 
 A [stdio proxy recording](proxy.md) has operations but no invented host turns or model decisions:

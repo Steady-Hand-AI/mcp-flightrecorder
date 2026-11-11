@@ -2,8 +2,10 @@
 
 ## Unreleased
 
+## 0.5.24
+
 - Add a complete source-shipped OpenAI and MCP example using the existing facade, with deterministic peers, preserved text-block formatting and independent evidence/application checks.
-- Add a matching development build and installed-package walkthrough that keeps native host responsibilities and preparation limits explicit.
+- Add a matching pinned-package and source-archive walkthrough that keeps native host responsibilities and preparation limits explicit.
 
 ## 0.5.23
 

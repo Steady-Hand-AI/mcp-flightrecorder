@@ -2,7 +2,7 @@
 
 `mcp_flightrecorder.easy.AgentRecorder` keeps capture bookkeeping inside the library. Your host still owns model requests, parsing, tool selection, retries, concurrency, client lifetimes and stream consumption. Start with the [synthetic evidence demo](../README.md#install-and-record), or use the [complete SDK-free host example](#complete-sdk-free-host-example) below.
 
-Use the [complete OpenAI and MCP recipe](openai_mcp.md) to run the facade with native SDK clients and retain separate evidence and application assertions. This development-source example has its own matching build/install commands.
+Use the [complete OpenAI and MCP recipe](openai_mcp.md) to run the facade with native SDK clients and retain separate evidence and application assertions. The guide installs the matching package, SDKs and source examples.
 
 ## The concepts
 
@@ -70,7 +70,7 @@ For exactly one actual invocation, `choice.answer(message)` is shorthand for tha
 
 ## Native OpenAI Chat
 
-Install `mcp-flightrecorder[openai-chat]==0.5.23` in your environment. Keep selection and argument parsing on the native response, including which completion alternative and which tool occurrence your application chooses.
+Install `mcp-flightrecorder[openai-chat]==0.5.24` in your environment. Keep selection and argument parsing on the native response, including which completion alternative and which tool occurrence your application chooses.
 
 ```python
 import json
@@ -201,7 +201,7 @@ print(sys.version, sqlite3.sqlite_version, sys.executable)
 PYTHON
 mfr_env=$(mktemp -d /tmp/mfr-env-XXXXXX)
 "$mfr_python" -m venv "$mfr_env"
-"$mfr_env/bin/python" -m pip install 'mcp-flightrecorder==0.5.23'
+"$mfr_env/bin/python" -m pip install 'mcp-flightrecorder==0.5.24'
 "$mfr_env/bin/fr" --version
 recording_dir=$(mktemp -d)
 cd "$recording_dir"

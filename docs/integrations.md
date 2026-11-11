@@ -1,6 +1,6 @@
 # SDK and host integrations
 
-**Package 0.5.23.** Integrations wrap callables or sessions the host already owns. They observe exposed requests, results and consumed stream chunks; they do not create a client-routing layer, infer provider-ID associations or take over application cleanup.
+**Package 0.5.24.** Integrations wrap callables or sessions the host already owns. They observe exposed requests, results and consumed stream chunks; they do not create a client-routing layer, infer provider-ID associations or take over application cleanup.
 
 The recorder core has no SDK dependency. Import an adapter explicitly after installing the matching extra or test profile. Separate dependency environments are necessary for incompatible MCP versions; [Testing](testing.md) lists the profiles.
 

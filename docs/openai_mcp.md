@@ -1,36 +1,25 @@
 # Run an OpenAI and MCP host with recording
 
-This development source adds [`examples/openai_mcp.py`](../examples/openai_mcp.py) and its sibling [`openai_mcp_peers.py`](../examples/openai_mcp_peers.py). They are not included in the 0.5.23 package or tag. Build the matching development wheel and keep the source examples directory intact using the recipe below.
+[`examples/openai_mcp.py`](../examples/openai_mcp.py) runs a complete host using the facade. Its sibling [`openai_mcp_peers.py`](../examples/openai_mcp_peers.py) supplies deterministic peers and reuses `tool_roundtrip.py`. Keep the matching source examples directory intact.
 
 The example runs genuine `AsyncOpenAI` and MCP clients through `AgentRecorder`. The host selects a model tool call, executes it, submits the answer in a second model request, closes recording, and checks evidence alongside an independent application expectation. A separate peer module supplies deterministic model responses and MCP tool results. The recipe uses no credentials or external provider service.
 
-## Install the matching development source
+## Install the package and matching source
 
-Start at the root of this development checkout after committing the changes you intend to run. The export contains exactly `HEAD`, including the host, its peer module and the shared deterministic services in `tool_roundtrip.py`. A disposable build copy keeps generated metadata out of the pristine source. The wheel installs the package, while the example remains in the source export.
+Start in an empty working directory. Install the pinned package and four SDK dependencies, then download the matching tagged source archive. The package comes from the installed wheel. The archive supplies the source-shipped examples.
 
 Use a supported GIL-enabled CPython 3.11+ with normal assertions. Set `MFR_PYTHON` if `python3` is not your intended interpreter. Keep the following commands in one shell session.
 
 ```sh
 set -eu
 mfr_python=$(command -v "${MFR_PYTHON:-python3}") || exit 1
-mfr_product=$(git rev-parse --show-toplevel)
 mfr_work=$(mktemp -d /tmp/mfr-openai-mcp-XXXXXX)
-mkdir "$mfr_work/source"
-git -C "$mfr_product" archive --format=tar HEAD > "$mfr_work/source.tar"
-tar -xf "$mfr_work/source.tar" -C "$mfr_work/source"
-mfr_source=$(cd "$mfr_work/source" && pwd -P)
-test -f "$mfr_source/examples/openai_mcp.py"
-test -f "$mfr_source/examples/openai_mcp_peers.py"
-cp -R "$mfr_source" "$mfr_work/build-source"
-"$mfr_python" -m venv "$mfr_work/build-env"
-"$mfr_work/build-env/bin/python" -m pip install build 'setuptools>=77.0.3' packaging
-"$mfr_work/build-env/bin/python" -m build --no-isolation --wheel \
-    --outdir "$mfr_work/dist" "$mfr_work/build-source"
-mfr_wheel="$mfr_work/dist/mcp_flightrecorder-0.5.23-py3-none-any.whl"
 "$mfr_python" -m venv "$mfr_work/env"
-"$mfr_work/env/bin/python" -m pip install "$mfr_wheel" \
-    -r "$mfr_source/requirements/integration.txt" \
+"$mfr_work/env/bin/python" -m pip install mcp-flightrecorder==0.5.24 \
     'openai==3.49.0' 'mcp==2.3.0' 'mcp-types==2.3.0' 'httpx2==2.16.0'
+curl -fsSL https://github.com/Steady-Hand-AI/mcp-flightrecorder/archive/refs/tags/0.5.24.tar.gz -o "$mfr_work/source.tar.gz"
+tar -xzf "$mfr_work/source.tar.gz" -C "$mfr_work"
+mfr_source=$(cd "$mfr_work/mcp-flightrecorder-0.5.24" && pwd -P)
 "$mfr_work/env/bin/python" -m pip check
 cd "$mfr_work"
 "$mfr_work/env/bin/python" -I -B - <<'PYTHON'
@@ -49,7 +38,9 @@ for name in ("openai", "mcp", "mcp-types", "httpx2"):
 PYTHON
 ```
 
-The existing [integration requirements](../requirements/integration.txt) supply the SDKs used by the deterministic peers. This recipe pins their direct versions and prints the installed versions so you can retain them with your results. The separate build and SDK environments keep build tools out of the application environment.
+The four SDK pins match the existing [integration requirements](../requirements/integration.txt). Retain the printed installed versions and package origin with your results.
+
+Alternatively, extract `mcp_flightrecorder-0.5.24.tar.gz` from the [PyPI release files](https://pypi.org/project/mcp-flightrecorder/0.5.24/#files) and set `mfr_source` to the absolute path of its `mcp_flightrecorder-0.5.24` directory instead of downloading the tagged archive. Keep the whole `examples/` directory intact and continue with the same commands outside that directory.
 
 ## Run the complete host
 

@@ -595,9 +595,13 @@ def test_child_exit_and_produced_output_are_preserved(tmp_path, mode):
 def test_large_native_stderr_never_enters_protocol_stdout(tmp_path):
     data, response = wire(request(1)), wire(answer(1))
     child, observed, pid = fixture(tmp_path, response, "--stderr-bytes", 300000)
-    result = run(proxy(child, tmp_path / "capture.sqlite"), data, tmp_path)
+    recording = tmp_path / "capture.sqlite"
+    result = run(proxy(child, recording), data, tmp_path)
     assert result.returncode == 0 and result.stdout == response and observed.read_bytes() == data and gone(pid)
-    assert len(result.stderr) == 300000 and result.stderr.startswith(b"NATIVE-STDERR\n")
+    notice = ("mfr.proxy: recording_path: " + json.dumps(str(recording.absolute())) + "\n").encode()
+    assert result.stderr.count(notice) == 1
+    expected = (b"NATIVE-STDERR\n" * (300000 // len(b"NATIVE-STDERR\n") + 1))[:300000]
+    assert result.stderr.replace(notice, b"", 1) == expected
 
 
 @pytest.mark.parametrize("sent,expected", [(signal.SIGINT, 130), (signal.SIGTERM, 143)])
